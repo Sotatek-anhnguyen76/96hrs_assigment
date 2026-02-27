@@ -65,6 +65,20 @@ class ChatMessage(BaseModel):
     content: str = Field(..., description="Message text")
 
 
+class PersonaOverride(BaseModel):
+    name: str | None = None
+    age: int | None = None
+    personality: str | None = None
+    occupation: str | None = None
+    relationship: str | None = None
+    ethnicity: str | None = None
+    bodyType: str | None = None
+    hairStyle: str | None = None
+    hairColor: str | None = None
+    eyeColor: str | None = None
+    style: str | None = None
+
+
 class ChatRequest(BaseModel):
     character_id: str = Field(..., description="Character profile ID (e.g. 'luna')")
     message: str = Field(..., description="User's message")
@@ -72,6 +86,7 @@ class ChatRequest(BaseModel):
         default_factory=list,
         description="Previous messages for context",
     )
+    persona_override: PersonaOverride | None = Field(None, description="Override character persona fields")
 
 
 class ChatResponse(BaseModel):
@@ -138,6 +153,39 @@ def _make_steps_public(steps: list[dict] | None, http_request: Request) -> list[
     return public_steps
 
 
+def _build_system_prompt(character: dict, override: PersonaOverride | None = None) -> str:
+    """Build a system prompt from persona fields, applying any overrides."""
+    persona = dict(character.get("persona", {}))
+    base_name = character["chat_name"]
+
+    if override:
+        for field in ["name", "age", "personality", "occupation", "relationship",
+                       "ethnicity", "bodyType", "hairStyle", "hairColor", "eyeColor", "style"]:
+            val = getattr(override, field, None)
+            if val is not None:
+                persona[field] = val
+
+    name = persona.get("name", base_name)
+    age = persona.get("age", 25)
+    occupation = persona.get("occupation", "")
+    personality = persona.get("personality", "friendly")
+    relationship = persona.get("relationship", "stranger")
+    ethnicity = persona.get("ethnicity", "")
+    body_type = persona.get("bodyType", "average")
+    hair_style = persona.get("hairStyle", "")
+    hair_color = persona.get("hairColor", "")
+    eye_color = persona.get("eyeColor", "")
+
+    return (
+        f"You are {name}, a {age}-year-old {occupation}. "
+        f"Your personality is {personality}. "
+        f"Your relationship with the user is: {relationship}. "
+        f"You speak naturally and casually, like texting someone you know. "
+        f"You are a {ethnicity} person with {hair_style} {hair_color} hair, "
+        f"{eye_color} eyes, and a {body_type} build."
+    )
+
+
 # --- Endpoints ---
 
 @app.get("/health")
@@ -181,6 +229,20 @@ async def get_avatar(character_id: str):
     return FileResponse(ref_path)
 
 
+@app.get("/characters/{character_id}/persona")
+async def get_character_persona(character_id: str):
+    """Get the full persona config for a character."""
+    character = get_character(character_id)
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    return {
+        "id": character_id,
+        "name": character["chat_name"],
+        "persona": character.get("persona", {}),
+        "system_prompt": character["chat_system_prompt"],
+    }
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, http_request: Request):
     """
@@ -191,11 +253,17 @@ async def chat(request: ChatRequest, http_request: Request):
     if not character:
         raise HTTPException(status_code=404, detail=f"Character '{request.character_id}' not found")
 
+    # Use persona override if provided, otherwise use default system prompt
+    if request.persona_override:
+        system_prompt = _build_system_prompt(character, request.persona_override)
+    else:
+        system_prompt = character["chat_system_prompt"]
+
     history = [{"role": m.role, "content": m.content} for m in request.conversation_history]
 
     chat_result = await chat_service.chat(
         user_message=request.message,
-        character_prompt=character["chat_system_prompt"],
+        character_prompt=system_prompt,
         conversation_history=history,
     )
 
@@ -268,11 +336,16 @@ async def chat_text_only(request: ChatRequest):
     if not character:
         raise HTTPException(status_code=404, detail=f"Character '{request.character_id}' not found")
 
+    if request.persona_override:
+        system_prompt = _build_system_prompt(character, request.persona_override)
+    else:
+        system_prompt = character["chat_system_prompt"]
+
     history = [{"role": m.role, "content": m.content} for m in request.conversation_history]
 
     chat_result = await chat_service.chat(
         user_message=request.message,
-        character_prompt=character["chat_system_prompt"],
+        character_prompt=system_prompt,
         conversation_history=history,
     )
 

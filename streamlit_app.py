@@ -24,6 +24,10 @@ if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 if "selected_character" not in st.session_state:
     st.session_state.selected_character = None
+if "persona" not in st.session_state:
+    st.session_state.persona = None
+if "chat_started" not in st.session_state:
+    st.session_state.chat_started = False
 
 
 # --- API calls ---
@@ -38,17 +42,25 @@ def fetch_characters():
         return []
 
 
-def send_text_only(character_id: str, message: str, history: list) -> dict:
+def fetch_persona(character_id: str):
+    try:
+        r = requests.get(f"{API_URL}/characters/{character_id}/persona", timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
+
+def send_text_only(character_id: str, message: str, history: list, persona_override=None) -> dict:
     """Fast text response — no image generation."""
-    r = requests.post(
-        f"{API_URL}/chat/stream",
-        json={
-            "character_id": character_id,
-            "message": message,
-            "conversation_history": history,
-        },
-        timeout=60,
-    )
+    payload = {
+        "character_id": character_id,
+        "message": message,
+        "conversation_history": history,
+    }
+    if persona_override:
+        payload["persona_override"] = persona_override
+    r = requests.post(f"{API_URL}/chat/stream", json=payload, timeout=60)
     r.raise_for_status()
     return r.json()
 
@@ -112,6 +124,13 @@ with st.sidebar:
                     st.session_state.selected_character = char
                     st.session_state.messages = []
                     st.session_state.conversation_history = []
+                    st.session_state.chat_started = False
+                    # Load persona defaults
+                    persona_data = fetch_persona(char["id"])
+                    if persona_data:
+                        st.session_state.persona = persona_data.get("persona", {})
+                    else:
+                        st.session_state.persona = {}
                     st.rerun()
 
     st.divider()
@@ -129,17 +148,110 @@ with st.sidebar:
         )
 
 
-# --- Main Chat Area ---
+# --- Main Area ---
 char = st.session_state.selected_character
 
 if not char:
     st.title("Welcome to Nectar AI")
     st.write("Select a character from the sidebar to start chatting.")
+
+elif not st.session_state.chat_started:
+    # --- Profile Editor (before chat) ---
+    persona = st.session_state.persona or {}
+
+    col_avatar, col_title = st.columns([1, 4])
+    with col_avatar:
+        if char.get("avatar_url"):
+            st.image(full_image_url(char["avatar_url"]), width=120)
+    with col_title:
+        st.title(f"Configure {char['name']}")
+        st.caption("Edit the persona before starting the chat")
+
+    st.divider()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        persona["name"] = st.text_input("Name", value=persona.get("name", char["name"]))
+        persona["age"] = st.number_input("Age", min_value=18, max_value=99, value=persona.get("age", 25))
+        persona["occupation"] = st.text_input("Occupation", value=persona.get("occupation", ""))
+        persona["personality"] = st.selectbox(
+            "Personality",
+            ["shy", "confident", "friendly", "temptress", "mysterious", "playful", "dominant", "submissive"],
+            index=["shy", "confident", "friendly", "temptress", "mysterious", "playful", "dominant", "submissive"].index(
+                persona.get("personality", "friendly")
+            ) if persona.get("personality", "friendly") in ["shy", "confident", "friendly", "temptress", "mysterious", "playful", "dominant", "submissive"] else 2,
+        )
+        persona["relationship"] = st.selectbox(
+            "Relationship",
+            ["stranger", "friend", "crush", "partner", "ex", "colleague"],
+            index=["stranger", "friend", "crush", "partner", "ex", "colleague"].index(
+                persona.get("relationship", "stranger")
+            ) if persona.get("relationship", "stranger") in ["stranger", "friend", "crush", "partner", "ex", "colleague"] else 0,
+        )
+
+    with col2:
+        persona["ethnicity"] = st.selectbox(
+            "Ethnicity",
+            ["asian", "latina", "caucasian", "african", "middle-eastern", "mixed"],
+            index=["asian", "latina", "caucasian", "african", "middle-eastern", "mixed"].index(
+                persona.get("ethnicity", "caucasian")
+            ) if persona.get("ethnicity", "caucasian") in ["asian", "latina", "caucasian", "african", "middle-eastern", "mixed"] else 2,
+        )
+        persona["bodyType"] = st.selectbox(
+            "Body Type",
+            ["skinny", "average", "athletic", "curvy", "muscular"],
+            index=["skinny", "average", "athletic", "curvy", "muscular"].index(
+                persona.get("bodyType", "average")
+            ) if persona.get("bodyType", "average") in ["skinny", "average", "athletic", "curvy", "muscular"] else 1,
+        )
+        persona["hairStyle"] = st.selectbox(
+            "Hair Style",
+            ["straight", "curly", "wavy", "short", "braided", "ponytail", "bun"],
+            index=["straight", "curly", "wavy", "short", "braided", "ponytail", "bun"].index(
+                persona.get("hairStyle", "straight")
+            ) if persona.get("hairStyle", "straight") in ["straight", "curly", "wavy", "short", "braided", "ponytail", "bun"] else 0,
+        )
+        persona["hairColor"] = st.selectbox(
+            "Hair Color",
+            ["black", "brown", "blonde", "red", "white", "pink", "blue"],
+            index=["black", "brown", "blonde", "red", "white", "pink", "blue"].index(
+                persona.get("hairColor", "black")
+            ) if persona.get("hairColor", "black") in ["black", "brown", "blonde", "red", "white", "pink", "blue"] else 0,
+        )
+        persona["eyeColor"] = st.selectbox(
+            "Eye Color",
+            ["brown", "blue", "green", "hazel", "gray"],
+            index=["brown", "blue", "green", "hazel", "gray"].index(
+                persona.get("eyeColor", "brown")
+            ) if persona.get("eyeColor", "brown") in ["brown", "blue", "green", "hazel", "gray"] else 0,
+        )
+
+    st.session_state.persona = persona
+
+    st.divider()
+
+    if st.button("Start Chat", type="primary", use_container_width=True):
+        st.session_state.chat_started = True
+        st.rerun()
+
 else:
-    st.title(char["name"])
+    # --- Chat Mode ---
+    persona = st.session_state.persona or {}
+    char_name = persona.get("name", char["name"])
+
+    st.title(char_name)
 
     # Get avatar URL for chat messages
     char_avatar = full_image_url(char.get("avatar_url")) if char.get("avatar_url") else None
+
+    # Build persona override to send with each request
+    persona_override = {k: v for k, v in persona.items() if v is not None} if persona else None
+
+    # Back to config button
+    if st.button("Edit Profile"):
+        st.session_state.chat_started = False
+        st.rerun()
 
     # Display chat history
     for msg in st.session_state.messages:
@@ -150,7 +262,7 @@ else:
                 st.image(full_image_url(msg["image_url"]), caption=msg.get("image_context", ""), width=400)
 
     # Chat input
-    if prompt := st.chat_input(f"Message {char['name']}..."):
+    if prompt := st.chat_input(f"Message {char_name}..."):
         # Show user message immediately
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -158,12 +270,13 @@ else:
 
         # Step 1: Get text response fast
         with st.chat_message("assistant", avatar=char_avatar):
-            with st.spinner(f"{char['name']} is thinking..."):
+            with st.spinner(f"{char_name} is thinking..."):
                 try:
                     text_resp = send_text_only(
                         char["id"],
                         prompt,
                         st.session_state.conversation_history,
+                        persona_override=persona_override,
                     )
 
                     st.write(text_resp["message"])
