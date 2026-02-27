@@ -5,7 +5,7 @@ and defines the chat persona for conversation.
 """
 import os
 
-REF_IMAGE_DIR = os.path.join(os.path.dirname(__file__), "..", "character")
+REF_IMAGE_DIR = "/workspace/frontend_demo/character"
 
 CHARACTERS = {
     "luna": {
