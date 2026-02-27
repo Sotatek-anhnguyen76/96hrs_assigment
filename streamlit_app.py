@@ -5,8 +5,13 @@ Streamlit frontend that connects to the FastAPI backend on RunPod.
 import streamlit as st
 import requests
 
-# Backend API URL — set in Streamlit secrets or fallback to localhost
-API_URL = st.secrets.get("API_URL", "http://localhost:8000")
+# Backend API URL — set in Streamlit Cloud secrets (Settings > Secrets)
+# Format: API_URL = "https://your-tunnel-url.trycloudflare.com"
+import os
+try:
+    API_URL = st.secrets["API_URL"]
+except Exception:
+    API_URL = os.environ.get("API_URL", "https://rental-presenting-compatibility-signing.trycloudflare.com")
 
 st.set_page_config(page_title="Nectar AI Chat", page_icon="💬", layout="wide")
 
@@ -20,7 +25,7 @@ if "selected_character" not in st.session_state:
 
 
 # --- API calls ---
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=10)
 def fetch_characters():
     try:
         r = requests.get(f"{API_URL}/characters", timeout=10)
