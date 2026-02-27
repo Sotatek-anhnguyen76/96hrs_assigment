@@ -169,63 +169,21 @@ elif not st.session_state.chat_started:
 
     st.divider()
 
-    col1, col2 = st.columns(2)
+    personality_options = ["shy", "confident", "friendly", "temptress", "mysterious", "playful", "dominant", "submissive"]
+    relationship_options = ["stranger", "friend", "crush", "partner", "ex", "colleague"]
 
-    with col1:
-        persona["name"] = st.text_input("Name", value=persona.get("name", char["name"]))
-        persona["age"] = st.number_input("Age", min_value=18, max_value=99, value=persona.get("age", 25))
-        persona["occupation"] = st.text_input("Occupation", value=persona.get("occupation", ""))
-        persona["personality"] = st.selectbox(
-            "Personality",
-            ["shy", "confident", "friendly", "temptress", "mysterious", "playful", "dominant", "submissive"],
-            index=["shy", "confident", "friendly", "temptress", "mysterious", "playful", "dominant", "submissive"].index(
-                persona.get("personality", "friendly")
-            ) if persona.get("personality", "friendly") in ["shy", "confident", "friendly", "temptress", "mysterious", "playful", "dominant", "submissive"] else 2,
-        )
-        persona["relationship"] = st.selectbox(
-            "Relationship",
-            ["stranger", "friend", "crush", "partner", "ex", "colleague"],
-            index=["stranger", "friend", "crush", "partner", "ex", "colleague"].index(
-                persona.get("relationship", "stranger")
-            ) if persona.get("relationship", "stranger") in ["stranger", "friend", "crush", "partner", "ex", "colleague"] else 0,
-        )
-
-    with col2:
-        persona["ethnicity"] = st.selectbox(
-            "Ethnicity",
-            ["asian", "latina", "caucasian", "african", "middle-eastern", "mixed"],
-            index=["asian", "latina", "caucasian", "african", "middle-eastern", "mixed"].index(
-                persona.get("ethnicity", "caucasian")
-            ) if persona.get("ethnicity", "caucasian") in ["asian", "latina", "caucasian", "african", "middle-eastern", "mixed"] else 2,
-        )
-        persona["bodyType"] = st.selectbox(
-            "Body Type",
-            ["skinny", "average", "athletic", "curvy", "muscular"],
-            index=["skinny", "average", "athletic", "curvy", "muscular"].index(
-                persona.get("bodyType", "average")
-            ) if persona.get("bodyType", "average") in ["skinny", "average", "athletic", "curvy", "muscular"] else 1,
-        )
-        persona["hairStyle"] = st.selectbox(
-            "Hair Style",
-            ["straight", "curly", "wavy", "short", "braided", "ponytail", "bun"],
-            index=["straight", "curly", "wavy", "short", "braided", "ponytail", "bun"].index(
-                persona.get("hairStyle", "straight")
-            ) if persona.get("hairStyle", "straight") in ["straight", "curly", "wavy", "short", "braided", "ponytail", "bun"] else 0,
-        )
-        persona["hairColor"] = st.selectbox(
-            "Hair Color",
-            ["black", "brown", "blonde", "red", "white", "pink", "blue"],
-            index=["black", "brown", "blonde", "red", "white", "pink", "blue"].index(
-                persona.get("hairColor", "black")
-            ) if persona.get("hairColor", "black") in ["black", "brown", "blonde", "red", "white", "pink", "blue"] else 0,
-        )
-        persona["eyeColor"] = st.selectbox(
-            "Eye Color",
-            ["brown", "blue", "green", "hazel", "gray"],
-            index=["brown", "blue", "green", "hazel", "gray"].index(
-                persona.get("eyeColor", "brown")
-            ) if persona.get("eyeColor", "brown") in ["brown", "blue", "green", "hazel", "gray"] else 0,
-        )
+    persona["personality"] = st.selectbox(
+        "Personality",
+        personality_options,
+        index=personality_options.index(persona.get("personality", "friendly"))
+        if persona.get("personality", "friendly") in personality_options else 2,
+    )
+    persona["relationship"] = st.selectbox(
+        "Relationship",
+        relationship_options,
+        index=relationship_options.index(persona.get("relationship", "stranger"))
+        if persona.get("relationship", "stranger") in relationship_options else 0,
+    )
 
     st.session_state.persona = persona
 
@@ -260,6 +218,12 @@ else:
             st.write(msg["content"])
             if msg.get("image_url"):
                 st.image(full_image_url(msg["image_url"]), caption=msg.get("image_context", ""), width=400)
+                if msg.get("face_scores"):
+                    for i, step in enumerate(msg["face_scores"]):
+                        score = step.get("face_score", 0)
+                        label = step.get("prompt", f"Step {i+1}")[:50]
+                        color = "green" if score >= 40 else "red"
+                        st.caption(f":{color}[Face similarity: {score:.1f}%] — {label}")
 
     # Chat input
     if prompt := st.chat_input(f"Message {char_name}..."):
@@ -306,6 +270,16 @@ else:
                                 img_url = full_image_url(img_resp["image_url"])
                                 st.image(img_url, caption=text_resp.get("image_context", ""), width=400)
                                 msg_data["image_url"] = img_resp["image_url"]
+
+                                # Show face similarity scores if available (AIO mode)
+                                steps = img_resp.get("steps", [])
+                                if steps:
+                                    msg_data["face_scores"] = steps
+                                    for i, step in enumerate(steps):
+                                        score = step.get("face_score", 0)
+                                        label = step.get("prompt", f"Step {i+1}")[:50]
+                                        color = "green" if score >= 40 else "red"
+                                        st.caption(f":{color}[Face similarity: {score:.1f}%] — {label}")
                             else:
                                 st.warning(f"Image generation failed: {img_resp.get('error', 'unknown')}")
 
