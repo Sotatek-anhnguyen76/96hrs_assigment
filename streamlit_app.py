@@ -1,6 +1,8 @@
 """
 Nectar AI — Multi-Modal Character Chat
-Streamlit frontend that connects to the FastAPI backend on RunPod.
+Streamlit frontend that connects to the FastAPI backend on Vast.ai.
+
+Uses split flow: /chat/stream for fast text, /chat/generate-image for async image gen.
 """
 import streamlit as st
 import requests
@@ -36,15 +38,32 @@ def fetch_characters():
         return []
 
 
-def send_message(character_id: str, message: str, history: list) -> dict:
+def send_text_only(character_id: str, message: str, history: list) -> dict:
+    """Fast text response — no image generation."""
     r = requests.post(
-        f"{API_URL}/chat",
+        f"{API_URL}/chat/stream",
         json={
             "character_id": character_id,
             "message": message,
             "conversation_history": history,
         },
-        timeout=120,
+        timeout=60,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def generate_image(character_id: str, image_context: str, pose_description=None, outfit_description=None) -> dict:
+    """Trigger image generation separately."""
+    r = requests.post(
+        f"{API_URL}/chat/generate-image",
+        json={
+            "character_id": character_id,
+            "image_context": image_context,
+            "pose_description": pose_description,
+            "outfit_description": outfit_description,
+        },
+        timeout=300,
     )
     r.raise_for_status()
     return r.json()
@@ -57,6 +76,13 @@ def fetch_cost():
         return r.json()
     except Exception:
         return None
+
+
+def full_image_url(url):
+    """Convert relative /images/... path to full public URL."""
+    if url and url.startswith("/"):
+        return f"{API_URL}{url}"
+    return url
 
 
 # --- Sidebar: Character Select + Cost ---
@@ -112,10 +138,7 @@ else:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
             if msg.get("image_url"):
-                image_url = msg["image_url"]
-                if image_url.startswith("/"):
-                    image_url = f"{API_URL}{image_url}"
-                st.image(image_url, caption=msg.get("image_context", ""), width=400)
+                st.image(full_image_url(msg["image_url"]), caption=msg.get("image_context", ""), width=400)
 
     # Chat input
     if prompt := st.chat_input(f"Message {char['name']}..."):
@@ -124,39 +147,47 @@ else:
         with st.chat_message("user"):
             st.write(prompt)
 
-        # Call backend and show response
+        # Step 1: Get text response fast
         with st.chat_message("assistant"):
             with st.spinner(f"{char['name']} is thinking..."):
                 try:
-                    response = send_message(
+                    text_resp = send_text_only(
                         char["id"],
                         prompt,
                         st.session_state.conversation_history,
                     )
 
-                    st.write(response["message"])
+                    st.write(text_resp["message"])
 
-                    if response.get("image_url"):
-                        image_url = response["image_url"]
-                        if image_url.startswith("/"):
-                            image_url = f"{API_URL}{image_url}"
-                        st.image(
-                            image_url,
-                            caption=response.get("image_context", ""),
-                            width=400,
-                        )
-
-                    # Save to state
-                    st.session_state.messages.append({
+                    # Save text to state
+                    msg_data = {
                         "role": "assistant",
-                        "content": response["message"],
-                        "image_url": response.get("image_url"),
-                        "image_context": response.get("image_context"),
-                    })
+                        "content": text_resp["message"],
+                        "image_url": None,
+                        "image_context": text_resp.get("image_context"),
+                    }
+
                     st.session_state.conversation_history.extend([
                         {"role": "user", "content": prompt},
-                        {"role": "assistant", "content": response["message"]},
+                        {"role": "assistant", "content": text_resp["message"]},
                     ])
+
+                    # Step 2: If image requested, generate it
+                    if text_resp.get("send_image") and text_resp.get("image_context"):
+                        with st.spinner("Generating image..."):
+                            img_resp = generate_image(
+                                char["id"],
+                                text_resp.get("image_context", ""),
+                            )
+
+                            if img_resp.get("status") == "succeeded" and img_resp.get("image_url"):
+                                img_url = full_image_url(img_resp["image_url"])
+                                st.image(img_url, caption=text_resp.get("image_context", ""), width=400)
+                                msg_data["image_url"] = img_resp["image_url"]
+                            else:
+                                st.warning(f"Image generation failed: {img_resp.get('error', 'unknown')}")
+
+                    st.session_state.messages.append(msg_data)
 
                 except Exception as e:
                     st.error(f"Error: {e}")

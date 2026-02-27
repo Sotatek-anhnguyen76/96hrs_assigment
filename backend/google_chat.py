@@ -3,7 +3,6 @@ Google Chat webhook — sends image generation results as rich cards.
 Posts source image, output image, prompt, face similarity, duration, and cost info.
 """
 import logging
-import os
 import uuid
 
 import requests
@@ -13,10 +12,8 @@ from cost_logger import get_session_summary
 
 logger = logging.getLogger(__name__)
 
-WEBHOOK_URL = os.environ.get(
-    "GOOGLE_CHAT_WEBHOOK_URL",
-    settings.GOOGLE_CHAT_WEBHOOK_URL if hasattr(settings, "GOOGLE_CHAT_WEBHOOK_URL") else "",
-)
+RESPONSE_WEBHOOK = settings.GOOGLE_CHAT_RESPONSE_WEBHOOK_URL
+PAYLOAD_WEBHOOK = settings.GOOGLE_CHAT_PAYLOAD_WEBHOOK_URL
 
 
 def _post(webhook_url: str, payload: dict):
@@ -55,7 +52,7 @@ def send_generation_result(
         duration: Total generation time in seconds
         webhook_url: Override webhook URL
     """
-    url = webhook_url or WEBHOOK_URL
+    url = webhook_url or RESPONSE_WEBHOOK
     if not url:
         return
 
@@ -150,7 +147,7 @@ def send_text_only(
     webhook_url: str | None = None,
 ):
     """Send a simple text-only chat message to Google Chat."""
-    url = webhook_url or WEBHOOK_URL
+    url = webhook_url or PAYLOAD_WEBHOOK
     if not url:
         return
 
@@ -170,7 +167,7 @@ def send_error(
     webhook_url: str | None = None,
 ):
     """Send an error notification to Google Chat."""
-    url = webhook_url or WEBHOOK_URL
+    url = webhook_url or RESPONSE_WEBHOOK
     if not url:
         return
 

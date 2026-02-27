@@ -15,8 +15,9 @@ class Settings(BaseSettings):
     # ComfyUI (direct connection)
     COMFYUI_SERVER_ADDRESS: str = "127.0.0.1:8188"
 
-    # Google Chat webhook (for sending results)
-    GOOGLE_CHAT_WEBHOOK_URL: str = ""
+    # Google Chat webhooks
+    GOOGLE_CHAT_RESPONSE_WEBHOOK_URL: str = ""
+    GOOGLE_CHAT_PAYLOAD_WEBHOOK_URL: str = ""
 
     # Testing mode: use AIO.json workflow for all tasks (set to true to enable)
     USE_AIO_MODE: bool = False

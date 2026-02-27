@@ -7,7 +7,7 @@ import os
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -124,7 +124,7 @@ async def get_characters():
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, http_request: Request):
     """
     Send a message to a character.
     Returns text response + optional image URL.
@@ -168,11 +168,16 @@ async def chat(request: ChatRequest):
                 response.image_url = image_result["image_url"]
                 response.image_generating = False
 
-                # Send to Google Chat
+                # Send to Google Chat with public URL
                 public_image_url = None
                 if response.image_url:
-                    # Build public URL from tunnel/host for Google Chat
-                    public_image_url = response.image_url  # relative path
+                    origin = http_request.headers.get("origin", "")
+                    if origin:
+                        public_image_url = f"{origin}{response.image_url}"
+                    else:
+                        scheme = http_request.url.scheme
+                        host = http_request.headers.get("host", "localhost:8000")
+                        public_image_url = f"{scheme}://{host}{response.image_url}"
                 send_generation_result(
                     character_name=character["chat_name"],
                     user_message=request.message,
@@ -224,7 +229,7 @@ async def chat_text_only(request: ChatRequest):
 
 
 @app.post("/chat/generate-image")
-async def generate_image_for_chat(request: GenerateImageRequest):
+async def generate_image_for_chat(request: GenerateImageRequest, http_request: Request):
     """
     Generate an image for a character given a scene context.
     Called separately from chat for async image generation.
@@ -233,12 +238,37 @@ async def generate_image_for_chat(request: GenerateImageRequest):
     if not character:
         raise HTTPException(status_code=404, detail=f"Character '{request.character_id}' not found")
 
+    import time
+    t0 = time.monotonic()
+
     image_result = await image_bridge.generate_image(
         ref_image_path=character["ref_image"],
         prompt=request.image_context,
         pose_description=request.pose_description,
         outfit_description=request.outfit_description,
     )
+
+    duration = time.monotonic() - t0
+
+    # Send to Google Chat with public URL
+    if image_result.get("status") == "succeeded" and image_result.get("image_url"):
+        # Build public URL from the request's origin header or host
+        origin = http_request.headers.get("origin", "")
+        if origin:
+            public_url = f"{origin}{image_result['image_url']}"
+        else:
+            scheme = http_request.url.scheme
+            host = http_request.headers.get("host", "localhost:8000")
+            public_url = f"{scheme}://{host}{image_result['image_url']}"
+
+        send_generation_result(
+            character_name=character["chat_name"],
+            user_message=request.image_context,
+            ai_message=f"[Image generated: {request.image_context}]",
+            image_url=public_url,
+            steps=image_result.get("steps"),
+            duration=duration,
+        )
 
     return image_result
 
