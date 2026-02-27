@@ -96,11 +96,20 @@ def send_generation_result(
             score = step.get("face_score")
             score_str = f"{score:.1f}%" if score is not None else "N/A"
             attempts = step.get("attempts", 1)
+            lora_switch = step.get("lora_switch", 1)
+            lora_name = step.get("lora_name", "none")
             step_widgets = [
                 {
                     "decoratedText": {
                         "topLabel": f"Step {i + 1} Prompt",
-                        "text": f"{step.get('prompt', 'N/A')}\nFace sim: {score_str} | Attempts: {attempts}",
+                        "text": f"{step.get('prompt', 'N/A')}",
+                        "wrapText": True,
+                    }
+                },
+                {
+                    "decoratedText": {
+                        "topLabel": "Details",
+                        "text": f"LoRA: {lora_name} (switch {lora_switch}) | Face sim: {score_str} | Attempts: {attempts}",
                         "wrapText": True,
                     }
                 },

@@ -75,6 +75,7 @@ def _prepare_aio_workflow(
     seed: int | None = None,
     width: int | None = None,
     height: int | None = None,
+    lora_switch: int = 1,
 ) -> dict:
     """Inject parameters into the edit_final_AIO workflow template.
 
@@ -108,9 +109,12 @@ def _prepare_aio_workflow(
         wf["9"]["inputs"]["width"] = width
         wf["9"]["inputs"]["height"] = height
 
-    # Node 22: default to no extra LoRA
+    # Node 22: LoRA switch (1=none, 2=PenisLora, 3=multiConceptNSFW)
     if "22" in wf:
-        wf["22"]["inputs"]["select"] = 1
+        if lora_switch not in (1, 2, 3):
+            lora_switch = 1
+        wf["22"]["inputs"]["select"] = lora_switch
+        logger.info(f"[AIO] LoRA switch set to {lora_switch} ({LORA_SWITCH_NAMES.get(lora_switch, '?')})")
 
     return wf
 
@@ -136,14 +140,17 @@ def _parse_face_score(client: ComfyUIClient) -> float:
         return 100.0
 
 
+LORA_SWITCH_NAMES = {1: "none", 2: "PenisLora", 3: "multiConceptNSFW"}
+
+
 async def _decompose_request(
     image_context: str | None,
     pose_description: str | None,
     outfit_description: str | None,
-) -> list[str]:
+) -> list[dict]:
     """Call Grok to decompose the user's image request into sequential editing steps.
 
-    Returns a list of 1-3 step prompts, ordered: pose → outfit → scene.
+    Returns a list of 1-3 step dicts: [{"prompt": "...", "switch": 1|2|3}, ...]
     """
     # Build context from what the chat service returned
     parts = []
@@ -155,7 +162,7 @@ async def _decompose_request(
         parts.append(f"Scene/context: {image_context}")
 
     if not parts:
-        return ["a natural photo, keep everything the same"]
+        return [{"prompt": "a natural photo, keep everything the same", "switch": 1}]
 
     user_request = ". ".join(parts)
 
@@ -169,13 +176,30 @@ RULES:
 - Only include steps that are actually needed. If the request is just about outfit, return 1 step.
 - Keep each step prompt under 30 words
 
-Respond with ONLY a JSON array of step prompts, nothing else.
+LORA SWITCH SELECTION — each step must specify which LoRA model to use:
+- switch 1: No LoRA. Use for SFW content — outfit changes, pose changes, background changes, normal scenes.
+- switch 2: PenisLora. Use ONLY when the step prompt explicitly involves showing a penis or dick. The prompt MUST mention "penis" or "dick" for this LoRA to work.
+- switch 3: multiConceptNSFW. Use for NSFW sexual content. Supports these trigger words that MUST appear in the prompt for the LoRA to activate: nsfw, cum_on_face, blowjob, cowgirlout (cowgirl position from outside view), creamp1e, penis, l1ck (woman licking penis), missionary, nipples, reversecowgirlpov (reverse cowgirl from man's POV), vagina.
+  When using switch 3, include the relevant trigger word(s) directly in the step prompt.
+
+Use switch 3 (multiConceptNSFW) for female picture. Only use switch 2 when the ONLY NSFW element is showing a penis for male picture.
+
+Respond with ONLY a JSON array of objects, each with "prompt" and "switch" keys. Nothing else.
 
 Example input: "wearing bikini, at the mountain, standing with arms raised"
-Example output: ["Change pose to standing with arms raised. Do not change facial features, keep face identity", "Change outfit to bikini. Do not change facial features, keep face identity", "Change background to mountain scenery with natural lighting. Do not change facial features, keep face identity"]
+Example output: [{{"prompt": "Change pose to standing with arms raised. Do not change facial features, keep face identity", "switch": 1}}, {{"prompt": "Change outfit to bikini. Do not change facial features, keep face identity", "switch": 1}}, {{"prompt": "Change background to mountain scenery with natural lighting. Do not change facial features, keep face identity", "switch": 1}}]
 
 Example input: "wearing a red dress"
-Example output: ["Change outfit to a red dress. Do not change facial features, keep face identity"]"""
+Example output: [{{"prompt": "Change outfit to a red dress. Do not change facial features, keep face identity", "switch": 1}}]
+
+Example input: "show me your body naked"
+Example output: [{{"prompt": "Remove all clothing, show full naked body, nsfw, nipples, vagina. Do not change facial features, keep face identity", "switch": 3}}]
+
+Example input: "show me your dick hard"
+Example output: [{{"prompt": "Show erect penis, dick fully visible. Do not change facial features, keep face identity", "switch": 2}}]
+
+Example input: "riding me cowgirl"
+Example output: [{{"prompt": "nsfw cowgirlout position, riding on top, naked. Do not change facial features, keep face identity", "switch": 3}}]"""
 
     try:
         async with httpx.AsyncClient() as http:
@@ -217,14 +241,24 @@ Example output: ["Change outfit to a red dress. Do not change facial features, k
 
             steps = json.loads(content)
             if isinstance(steps, list) and steps:
-                logger.info(f"[AIO] Grok decomposed into {len(steps)} steps: {steps}")
-                return steps[:MAX_STEPS]
+                # Normalize: accept both old string format and new object format
+                normalized = []
+                for s in steps[:MAX_STEPS]:
+                    if isinstance(s, str):
+                        normalized.append({"prompt": s, "switch": 1})
+                    elif isinstance(s, dict) and "prompt" in s:
+                        sw = s.get("switch", 1)
+                        if sw not in (1, 2, 3):
+                            sw = 1
+                        normalized.append({"prompt": s["prompt"], "switch": sw})
+                logger.info(f"[AIO] Grok decomposed into {len(normalized)} steps: {normalized}")
+                return normalized
 
     except Exception as e:
         logger.error(f"[AIO] Decompose failed: {e}, falling back to single step")
 
     # Fallback: single combined prompt
-    return [f"{user_request}. Do not change facial features, keep face identity"]
+    return [{"prompt": f"{user_request}. Do not change facial features, keep face identity", "switch": 1}]
 
 
 class ImageBridge:
@@ -333,8 +367,14 @@ class ImageBridge:
                 final_image_bytes = None
                 step_results = []  # Track results per step for reporting
 
-                for step_idx, step_prompt in enumerate(steps):
-                    logger.info(f"[AIO] Step {step_idx + 1}/{len(steps)}: '{step_prompt[:60]}...'")
+                for step_idx, step_info in enumerate(steps):
+                    step_prompt = step_info["prompt"]
+                    step_switch = step_info.get("switch", 1)
+                    lora_name = LORA_SWITCH_NAMES.get(step_switch, "unknown")
+                    logger.info(
+                        f"[AIO] Step {step_idx + 1}/{len(steps)}: '{step_prompt[:60]}...' "
+                        f"| LoRA switch={step_switch} ({lora_name})"
+                    )
 
                     best_image = None
                     best_score = -1.0
@@ -359,6 +399,7 @@ class ImageBridge:
                             seed=seed,
                             width=w,
                             height=h,
+                            lora_switch=step_switch,
                         )
 
                         output_images = client.execute_workflow(workflow)
@@ -402,6 +443,8 @@ class ImageBridge:
                         "face_score": best_score,
                         "attempts": attempt + 1,
                         "image_url": step_image_url,
+                        "lora_switch": step_switch,
+                        "lora_name": lora_name,
                     })
 
                     final_image_bytes = best_image
