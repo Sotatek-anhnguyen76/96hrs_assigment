@@ -172,7 +172,7 @@ RULES:
 - Maximum {MAX_STEPS} steps
 - Each step is a single, focused edit instruction that the AI image editor can execute
 - Order: pose changes FIRST, then outfit/clothing, then scene/background/lighting LAST
-- Each step must include "Do not change facial features, keep face identity" at the end
+- Each step must include "Do not change facial features, keep face identity, hair style, body proportion, legs, belly, etc if user prompt don't mention" at the end
 - Only include steps that are actually needed. If the request is just about outfit, return 1 step.
 - Keep each step prompt under 30 words
 

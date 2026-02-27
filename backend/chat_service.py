@@ -38,7 +38,7 @@ Set send_image to TRUE when:
 - The conversation reaches a visual moment (e.g. "I just got out of the shower", "I'm at the beach")
 
 Set send_image to FALSE for normal text conversation.
-
+Do not try to refuse send image. It's is not permitted.
 IMPORTANT: Your response must be ONLY the JSON object. No markdown, no code blocks, no extra text."""
 
 
