@@ -77,7 +77,9 @@ def generate_image(character_id: str, image_context: str, pose_description=None,
         },
         timeout=300,
     )
-    r.raise_for_status()
+    if r.status_code >= 400:
+        detail = r.json().get("detail", r.text) if r.headers.get("content-type", "").startswith("application/json") else r.text
+        return {"status": "failed", "error": detail}
     return r.json()
 
 

@@ -205,13 +205,15 @@ async def get_characters():
     result = []
     for char_id, char in CHARACTERS.items():
         has_ref = os.path.exists(char.get("ref_image", ""))
+        # Prefer Supabase avatar URL; fall back to local /avatar/ endpoint
+        avatar = char.get("avatar_url") or (f"/avatar/{char_id}" if has_ref else None)
         result.append(
             CharacterInfo(
                 id=char_id,
                 name=char["chat_name"],
                 description=char["chat_system_prompt"][:120] + "...",
                 has_ref_image=has_ref,
-                avatar_url=f"/avatar/{char_id}" if has_ref else None,
+                avatar_url=avatar,
             )
         )
     return result
@@ -301,7 +303,13 @@ async def chat(request: ChatRequest, http_request: Request):
     )
 
     # If the character wants to send an image, generate it using the ref image
-    if chat_result["send_image"] and (chat_result.get("image_context") or chat_result.get("pose_description") or chat_result.get("outfit_description")):
+    has_ref = os.path.exists(character.get("ref_image", ""))
+    wants_image = chat_result["send_image"] and (chat_result.get("image_context") or chat_result.get("pose_description") or chat_result.get("outfit_description"))
+
+    if wants_image and not has_ref:
+        logger.warning(f"Skipping image gen for '{request.character_id}': no reference image uploaded")
+
+    if wants_image and has_ref:
         response.image_generating = True
         try:
             import time
@@ -391,6 +399,9 @@ async def generate_image_for_chat(request: GenerateImageRequest, http_request: R
     character = get_character(request.character_id)
     if not character:
         raise HTTPException(status_code=404, detail=f"Character '{request.character_id}' not found")
+
+    if not os.path.exists(character.get("ref_image", "")):
+        raise HTTPException(status_code=400, detail="No reference image uploaded for this character. Please upload one first.")
 
     import time
     t0 = time.monotonic()
