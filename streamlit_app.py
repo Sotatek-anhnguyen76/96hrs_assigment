@@ -81,6 +81,21 @@ def generate_image(character_id: str, image_context: str, pose_description=None,
     return r.json()
 
 
+def upload_custom_image(file_bytes, filename):
+    """Upload a custom reference image to the backend."""
+    try:
+        r = requests.post(
+            f"{API_URL}/characters/upload-image",
+            files={"file": (filename, file_bytes, "image/jpeg")},
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        st.error(f"Upload failed: {e}")
+        return None
+
+
 def fetch_cost():
     try:
         r = requests.get(f"{API_URL}/cost", timeout=5)
@@ -161,11 +176,35 @@ elif not st.session_state.chat_started:
 
     col_avatar, col_title = st.columns([1, 4])
     with col_avatar:
-        if char.get("avatar_url"):
+        # Show uploaded image for custom, otherwise show avatar
+        if char["id"] == "custom" and st.session_state.get("custom_image_preview"):
+            st.image(st.session_state.custom_image_preview, width=120)
+        elif char.get("avatar_url"):
             st.image(full_image_url(char["avatar_url"]), width=120)
     with col_title:
         st.title(f"Configure {char['name']}")
         st.caption("Edit the persona before starting the chat")
+
+    # Custom character: image upload
+    if char["id"] == "custom":
+        st.divider()
+        st.markdown("**Upload Reference Image**")
+        uploaded_file = st.file_uploader(
+            "Choose a reference photo for your character",
+            type=["jpg", "jpeg", "png", "webp"],
+            key="custom_upload",
+        )
+        if uploaded_file is not None:
+            file_bytes = uploaded_file.read()
+            st.image(file_bytes, caption="Preview", width=200)
+            if st.button("Upload Image", type="primary"):
+                result = upload_custom_image(file_bytes, uploaded_file.name)
+                if result and result.get("status") == "ok":
+                    st.success("Image uploaded successfully!")
+                    st.session_state.custom_image_preview = file_bytes
+                    # Clear character cache so avatar refreshes
+                    fetch_characters.clear()
+                    st.rerun()
 
     st.divider()
 

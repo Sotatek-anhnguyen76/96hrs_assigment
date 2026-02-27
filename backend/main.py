@@ -7,7 +7,7 @@ import os
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -227,6 +227,32 @@ async def get_avatar(character_id: str):
     if not os.path.exists(ref_path):
         raise HTTPException(status_code=404, detail="Avatar not found")
     return FileResponse(ref_path)
+
+
+@app.post("/characters/upload-image")
+async def upload_character_image(file: UploadFile = File(...)):
+    """Upload a custom reference image. Saves it as the 'custom' character's ref image."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+
+    from character_profiles import REF_IMAGE_DIR
+    uploads_dir = os.path.join(REF_IMAGE_DIR, "uploads")
+    os.makedirs(uploads_dir, exist_ok=True)
+
+    # Save with original extension
+    ext = os.path.splitext(file.filename or "image.jpg")[1] or ".jpg"
+    save_path = os.path.join(uploads_dir, f"custom{ext}")
+    content = await file.read()
+    with open(save_path, "wb") as f:
+        f.write(content)
+
+    # Update the custom character's ref_image path at runtime
+    custom_char = CHARACTERS.get("custom")
+    if custom_char:
+        custom_char["ref_image"] = save_path
+
+    logger.info(f"Custom image uploaded: {save_path} ({len(content)} bytes)")
+    return {"status": "ok", "path": save_path, "size": len(content)}
 
 
 @app.get("/characters/{character_id}/persona")
