@@ -21,6 +21,7 @@ class ComfyUIClient:
         self.server_address = server_address
         self.client_id = str(uuid.uuid4())
         self._ws: Optional[websocket.WebSocket] = None
+        self._last_prompt_id: Optional[str] = None
 
     def connect(self):
         ws_url = f"ws://{self.server_address}/ws?clientId={self.client_id}"
@@ -69,6 +70,7 @@ class ComfyUIClient:
         prompt_id = result.get("prompt_id")
         if not prompt_id:
             raise RuntimeError(f"Failed to queue: {result}")
+        self._last_prompt_id = prompt_id
 
         logger.info(f"Queued workflow: {prompt_id}")
 
@@ -179,6 +181,23 @@ class ComfyUIClient:
             wf["3"]["inputs"]["seed"] = seed
 
         return wf
+
+    def get_text_output(self, node_id: str) -> str | None:
+        """Get text output from a node (e.g. PreviewAny) in the last executed workflow."""
+        if not self._last_prompt_id:
+            return None
+        try:
+            url = f"http://{self.server_address}/history/{self._last_prompt_id}"
+            history = json.loads(urllib.request.urlopen(url).read())
+            outputs = history.get(self._last_prompt_id, {}).get("outputs", {})
+            node_output = outputs.get(node_id, {})
+            # PreviewAny stores in "text" field
+            text_list = node_output.get("text", [])
+            if text_list:
+                return str(text_list[0])
+        except Exception as e:
+            logger.warning(f"Failed to get text output for node {node_id}: {e}")
+        return None
 
     def check_status(self) -> dict:
         try:

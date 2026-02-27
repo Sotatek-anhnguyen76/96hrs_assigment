@@ -6,6 +6,7 @@ import logging
 import httpx
 
 from config import settings
+from cost_logger import log_image_call
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,12 @@ async def generate_pose_image(pose_description: str) -> bytes:
         )
         resp.raise_for_status()
         result = resp.json()
+
+        log_image_call(
+            model=settings.XAI_IMAGE_MODEL,
+            n_images=1,
+            caller="pose_generator",
+        )
 
         # Get the image URL from response
         data = result.get("data", [])

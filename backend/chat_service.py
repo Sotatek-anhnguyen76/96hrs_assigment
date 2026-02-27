@@ -7,6 +7,7 @@ import logging
 import httpx
 
 from config import settings
+from cost_logger import log_chat_call
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,17 @@ class ChatService:
                 )
                 response.raise_for_status()
                 result = response.json()
+
+                # Log cost
+                usage = result.get("usage", {})
+                log_chat_call(
+                    model=self.model,
+                    endpoint="/chat/completions",
+                    input_tokens=usage.get("prompt_tokens", 0),
+                    output_tokens=usage.get("completion_tokens", 0),
+                    caller="chat_service",
+                )
+
                 content = result["choices"][0]["message"]["content"].strip()
 
                 # Parse JSON response - handle markdown code blocks

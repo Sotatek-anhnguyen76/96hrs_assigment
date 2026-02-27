@@ -14,8 +14,14 @@ from pydantic import BaseModel, Field
 
 from config import settings
 from chat_service import ChatService
-from image_bridge import ImageBridge, STORAGE_DIR
 from character_profiles import get_character, CHARACTERS
+from cost_logger import get_session_summary
+
+# AIO testing mode: swap to single-workflow image bridge
+if settings.USE_AIO_MODE:
+    from image_bridge_aio import ImageBridge, STORAGE_DIR
+else:
+    from image_bridge import ImageBridge, STORAGE_DIR
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,6 +98,12 @@ class GenerateImageRequest(BaseModel):
 @app.get("/health")
 async def health():
     return {"status": "healthy", "version": "1.0.0"}
+
+
+@app.get("/cost")
+async def cost_summary():
+    """Current session Grok API cost summary."""
+    return get_session_summary()
 
 
 @app.get("/characters", response_model=list[CharacterInfo])

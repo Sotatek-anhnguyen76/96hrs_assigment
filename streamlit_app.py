@@ -1,0 +1,157 @@
+"""
+Nectar AI — Multi-Modal Character Chat
+Streamlit frontend that connects to the FastAPI backend on RunPod.
+"""
+import streamlit as st
+import requests
+
+# Backend API URL — set in Streamlit secrets or fallback to localhost
+API_URL = st.secrets.get("API_URL", "http://localhost:8000")
+
+st.set_page_config(page_title="Nectar AI Chat", page_icon="💬", layout="wide")
+
+# --- State ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+if "selected_character" not in st.session_state:
+    st.session_state.selected_character = None
+
+
+# --- API calls ---
+@st.cache_data(ttl=60)
+def fetch_characters():
+    try:
+        r = requests.get(f"{API_URL}/characters", timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        st.error(f"Cannot reach backend: {e}")
+        return []
+
+
+def send_message(character_id: str, message: str, history: list) -> dict:
+    r = requests.post(
+        f"{API_URL}/chat",
+        json={
+            "character_id": character_id,
+            "message": message,
+            "conversation_history": history,
+        },
+        timeout=120,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def fetch_cost():
+    try:
+        r = requests.get(f"{API_URL}/cost", timeout=5)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
+
+# --- Sidebar: Character Select + Cost ---
+with st.sidebar:
+    st.markdown("## Nectar AI")
+    st.caption("Multi-Modal Character Chat")
+    st.divider()
+
+    characters = fetch_characters()
+
+    for char in characters:
+        selected = st.session_state.selected_character
+        is_selected = selected and selected["id"] == char["id"]
+
+        if st.button(
+            f"**{char['name']}**",
+            key=f"char_{char['id']}",
+            use_container_width=True,
+            type="primary" if is_selected else "secondary",
+        ):
+            if not is_selected:
+                st.session_state.selected_character = char
+                st.session_state.messages = []
+                st.session_state.conversation_history = []
+                st.rerun()
+
+    st.divider()
+
+    # Cost tracker
+    cost = fetch_cost()
+    if cost:
+        st.markdown("**API Cost**")
+        col1, col2 = st.columns(2)
+        col1.metric("Calls", cost.get("total_calls", 0))
+        col2.metric("Cost", f"${cost.get('total_cost_usd', 0):.4f}")
+        st.caption(
+            f"In: {cost.get('total_input_tokens', 0):,} | "
+            f"Out: {cost.get('total_output_tokens', 0):,} tokens"
+        )
+
+
+# --- Main Chat Area ---
+char = st.session_state.selected_character
+
+if not char:
+    st.title("Welcome to Nectar AI")
+    st.write("Select a character from the sidebar to start chatting.")
+else:
+    st.title(char["name"])
+
+    # Display chat history
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+            if msg.get("image_url"):
+                image_url = msg["image_url"]
+                if image_url.startswith("/"):
+                    image_url = f"{API_URL}{image_url}"
+                st.image(image_url, caption=msg.get("image_context", ""), width=400)
+
+    # Chat input
+    if prompt := st.chat_input(f"Message {char['name']}..."):
+        # Show user message immediately
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.write(prompt)
+
+        # Call backend and show response
+        with st.chat_message("assistant"):
+            with st.spinner(f"{char['name']} is thinking..."):
+                try:
+                    response = send_message(
+                        char["id"],
+                        prompt,
+                        st.session_state.conversation_history,
+                    )
+
+                    st.write(response["message"])
+
+                    if response.get("image_url"):
+                        image_url = response["image_url"]
+                        if image_url.startswith("/"):
+                            image_url = f"{API_URL}{image_url}"
+                        st.image(
+                            image_url,
+                            caption=response.get("image_context", ""),
+                            width=400,
+                        )
+
+                    # Save to state
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": response["message"],
+                        "image_url": response.get("image_url"),
+                        "image_context": response.get("image_context"),
+                    })
+                    st.session_state.conversation_history.extend([
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": response["message"]},
+                    ])
+
+                except Exception as e:
+                    st.error(f"Error: {e}")

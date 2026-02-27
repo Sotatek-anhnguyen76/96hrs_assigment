@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # ComfyUI (direct connection)
     COMFYUI_SERVER_ADDRESS: str = "127.0.0.1:8188"
 
+    # Testing mode: use AIO.json workflow for all tasks (set to true to enable)
+    USE_AIO_MODE: bool = False
+
     class Config:
         env_file = ".env"
         extra = "ignore"
