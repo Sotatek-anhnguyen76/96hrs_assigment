@@ -79,7 +79,7 @@ def fetch_cost():
 
 
 def full_image_url(url):
-    """Convert relative /images/... path to full public URL."""
+    """Convert relative /images/... or /avatar/... path to full public URL."""
     if url and url.startswith("/"):
         return f"{API_URL}{url}"
     return url
@@ -97,17 +97,22 @@ with st.sidebar:
         selected = st.session_state.selected_character
         is_selected = selected and selected["id"] == char["id"]
 
-        if st.button(
-            f"**{char['name']}**",
-            key=f"char_{char['id']}",
-            use_container_width=True,
-            type="primary" if is_selected else "secondary",
-        ):
-            if not is_selected:
-                st.session_state.selected_character = char
-                st.session_state.messages = []
-                st.session_state.conversation_history = []
-                st.rerun()
+        col_img, col_btn = st.columns([1, 3])
+        with col_img:
+            if char.get("avatar_url"):
+                st.image(full_image_url(char["avatar_url"]), width=50)
+        with col_btn:
+            if st.button(
+                f"**{char['name']}**",
+                key=f"char_{char['id']}",
+                use_container_width=True,
+                type="primary" if is_selected else "secondary",
+            ):
+                if not is_selected:
+                    st.session_state.selected_character = char
+                    st.session_state.messages = []
+                    st.session_state.conversation_history = []
+                    st.rerun()
 
     st.divider()
 
@@ -133,9 +138,13 @@ if not char:
 else:
     st.title(char["name"])
 
+    # Get avatar URL for chat messages
+    char_avatar = full_image_url(char.get("avatar_url")) if char.get("avatar_url") else None
+
     # Display chat history
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
+        avatar = char_avatar if msg["role"] == "assistant" else None
+        with st.chat_message(msg["role"], avatar=avatar):
             st.write(msg["content"])
             if msg.get("image_url"):
                 st.image(full_image_url(msg["image_url"]), caption=msg.get("image_context", ""), width=400)
@@ -148,7 +157,7 @@ else:
             st.write(prompt)
 
         # Step 1: Get text response fast
-        with st.chat_message("assistant"):
+        with st.chat_message("assistant", avatar=char_avatar):
             with st.spinner(f"{char['name']} is thinking..."):
                 try:
                     text_resp = send_text_only(

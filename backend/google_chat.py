@@ -35,9 +35,11 @@ def send_generation_result(
     user_message: str,
     ai_message: str,
     image_url: str | None = None,
+    original_image_url: str | None = None,
     steps: list[dict] | None = None,
     face_scores: list[float] | None = None,
     duration: float = 0.0,
+    workflow_type: str = "unknown",
     webhook_url: str | None = None,
 ):
     """Send a generation result card to Google Chat.
@@ -47,9 +49,11 @@ def send_generation_result(
         user_message: What the user said
         ai_message: Character's text reply
         image_url: Public URL of the final generated image (or None)
-        steps: List of step dicts [{"prompt": "...", "face_score": 85.2}, ...]
+        original_image_url: Public URL of the original reference image
+        steps: List of step dicts [{"prompt": "...", "face_score": 85.2, "image_url": "..."}, ...]
         face_scores: Face similarity scores per step
         duration: Total generation time in seconds
+        workflow_type: Which workflow/switch was chosen (e.g. "pose", "outfit", "aio")
         webhook_url: Override webhook URL
     """
     url = webhook_url or RESPONSE_WEBHOOK
@@ -59,38 +63,63 @@ def send_generation_result(
     # Build sections
     sections = []
 
-    # Chat section
+    # Chat section with workflow type
     sections.append({
         "header": "Chat",
         "widgets": [
+            {"decoratedText": {"topLabel": "Workflow", "text": f"Switch: {workflow_type}", "wrapText": True}},
             {"decoratedText": {"topLabel": "User", "text": user_message, "wrapText": True}},
             {"decoratedText": {"topLabel": character_name, "text": ai_message, "wrapText": True}},
         ],
     })
 
-    # Steps section (if multi-step AIO)
+    # Original reference image
+    if original_image_url:
+        sections.append({
+            "header": "Original Image",
+            "widgets": [
+                {"image": {"imageUrl": original_image_url, "altText": f"{character_name} original"}},
+                {
+                    "buttonList": {
+                        "buttons": [{
+                            "text": "Open Original",
+                            "onClick": {"openLink": {"url": original_image_url}},
+                        }]
+                    }
+                },
+            ],
+        })
+
+    # Steps section with images (if multi-step AIO)
     if steps:
-        step_widgets = []
         for i, step in enumerate(steps):
             score = step.get("face_score")
             score_str = f"{score:.1f}%" if score is not None else "N/A"
             attempts = step.get("attempts", 1)
-            step_widgets.append({
-                "decoratedText": {
-                    "topLabel": f"Step {i + 1}",
-                    "text": f"{step.get('prompt', 'N/A')}\nFace sim: {score_str} | Attempts: {attempts}",
-                    "wrapText": True,
-                }
+            step_widgets = [
+                {
+                    "decoratedText": {
+                        "topLabel": f"Step {i + 1} Prompt",
+                        "text": f"{step.get('prompt', 'N/A')}\nFace sim: {score_str} | Attempts: {attempts}",
+                        "wrapText": True,
+                    }
+                },
+            ]
+            # Include step image if available
+            step_img = step.get("image_url")
+            if step_img:
+                step_widgets.append(
+                    {"image": {"imageUrl": step_img, "altText": f"Step {i + 1} result"}},
+                )
+            sections.append({
+                "header": f"Step {i + 1} / {len(steps)}",
+                "widgets": step_widgets,
             })
-        sections.append({
-            "header": f"Pipeline ({len(steps)} steps)",
-            "widgets": step_widgets,
-        })
 
-    # Output image
+    # Final output image
     if image_url:
         sections.append({
-            "header": "Generated Image",
+            "header": "Final Generated Image",
             "widgets": [
                 {"image": {"imageUrl": image_url, "altText": f"{character_name} photo"}},
                 {

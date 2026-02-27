@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -85,6 +86,7 @@ class CharacterInfo(BaseModel):
     name: str
     description: str
     has_ref_image: bool
+    avatar_url: str | None = None
 
 
 class GenerateImageRequest(BaseModel):
@@ -92,6 +94,48 @@ class GenerateImageRequest(BaseModel):
     image_context: str = Field("", description="Scene description / edit prompt")
     pose_description: str | None = Field(None, description="Body pose for xAI image gen")
     outfit_description: str | None = Field(None, description="Outfit change instruction for SAM3 workflow")
+
+
+def _make_public_url(relative_url: str | None, http_request: Request) -> str | None:
+    """Convert a relative /images/... path to a full public URL."""
+    if not relative_url:
+        return None
+    origin = http_request.headers.get("origin", "")
+    if origin:
+        return f"{origin}{relative_url}"
+    scheme = http_request.url.scheme
+    host = http_request.headers.get("host", "localhost:8000")
+    return f"{scheme}://{host}{relative_url}"
+
+
+def _detect_workflow_type(chat_result: dict) -> str:
+    """Determine which workflow/switch was chosen based on chat intent."""
+    if settings.USE_AIO_MODE:
+        parts = []
+        if chat_result.get("pose_description"):
+            parts.append("pose")
+        if chat_result.get("outfit_description"):
+            parts.append("outfit")
+        if chat_result.get("image_context") and not parts:
+            parts.append("scene")
+        return f"AIO ({' + '.join(parts)})" if parts else "AIO"
+    else:
+        if chat_result.get("pose_description"):
+            return "Pose Workflow"
+        return "Outfit Workflow"
+
+
+def _make_steps_public(steps: list[dict] | None, http_request: Request) -> list[dict] | None:
+    """Convert step image_url fields to public URLs."""
+    if not steps:
+        return steps
+    public_steps = []
+    for step in steps:
+        s = dict(step)
+        if s.get("image_url"):
+            s["image_url"] = _make_public_url(s["image_url"], http_request)
+        public_steps.append(s)
+    return public_steps
 
 
 # --- Endpoints ---
@@ -112,15 +156,29 @@ async def get_characters():
     """List all available characters."""
     result = []
     for char_id, char in CHARACTERS.items():
+        has_ref = os.path.exists(char.get("ref_image", ""))
         result.append(
             CharacterInfo(
                 id=char_id,
                 name=char["chat_name"],
                 description=char["chat_system_prompt"][:120] + "...",
-                has_ref_image=os.path.exists(char.get("ref_image", "")),
+                has_ref_image=has_ref,
+                avatar_url=f"/avatar/{char_id}" if has_ref else None,
             )
         )
     return result
+
+
+@app.get("/avatar/{character_id}")
+async def get_avatar(character_id: str):
+    """Serve character reference image as avatar."""
+    character = get_character(character_id)
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    ref_path = character.get("ref_image", "")
+    if not os.path.exists(ref_path):
+        raise HTTPException(status_code=404, detail="Avatar not found")
+    return FileResponse(ref_path)
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -168,23 +226,20 @@ async def chat(request: ChatRequest, http_request: Request):
                 response.image_url = image_result["image_url"]
                 response.image_generating = False
 
-                # Send to Google Chat with public URL
-                public_image_url = None
-                if response.image_url:
-                    origin = http_request.headers.get("origin", "")
-                    if origin:
-                        public_image_url = f"{origin}{response.image_url}"
-                    else:
-                        scheme = http_request.url.scheme
-                        host = http_request.headers.get("host", "localhost:8000")
-                        public_image_url = f"{scheme}://{host}{response.image_url}"
+                # Send to Google Chat with public URLs
+                public_image_url = _make_public_url(response.image_url, http_request)
+                public_original_url = _make_public_url(image_result.get("original_image_url"), http_request)
+                public_steps = _make_steps_public(image_result.get("steps"), http_request)
+
                 send_generation_result(
                     character_name=character["chat_name"],
                     user_message=request.message,
                     ai_message=chat_result["message"],
                     image_url=public_image_url,
-                    steps=image_result.get("steps"),
+                    original_image_url=public_original_url,
+                    steps=public_steps,
                     duration=duration,
+                    workflow_type=_detect_workflow_type(chat_result),
                 )
             else:
                 logger.error(f"Image generation failed: {image_result.get('error')}")
@@ -250,24 +305,33 @@ async def generate_image_for_chat(request: GenerateImageRequest, http_request: R
 
     duration = time.monotonic() - t0
 
-    # Send to Google Chat with public URL
+    # Send to Google Chat with public URLs
     if image_result.get("status") == "succeeded" and image_result.get("image_url"):
-        # Build public URL from the request's origin header or host
-        origin = http_request.headers.get("origin", "")
-        if origin:
-            public_url = f"{origin}{image_result['image_url']}"
-        else:
-            scheme = http_request.url.scheme
-            host = http_request.headers.get("host", "localhost:8000")
-            public_url = f"{scheme}://{host}{image_result['image_url']}"
+        public_url = _make_public_url(image_result["image_url"], http_request)
+        public_original_url = _make_public_url(image_result.get("original_image_url"), http_request)
+        public_steps = _make_steps_public(image_result.get("steps"), http_request)
+
+        # Detect workflow type from the request params
+        wf_type = "AIO" if settings.USE_AIO_MODE else ("Pose Workflow" if request.pose_description else "Outfit Workflow")
+        if settings.USE_AIO_MODE:
+            parts = []
+            if request.pose_description:
+                parts.append("pose")
+            if request.outfit_description:
+                parts.append("outfit")
+            if request.image_context and not parts:
+                parts.append("scene")
+            wf_type = f"AIO ({' + '.join(parts)})" if parts else "AIO"
 
         send_generation_result(
             character_name=character["chat_name"],
             user_message=request.image_context,
             ai_message=f"[Image generated: {request.image_context}]",
             image_url=public_url,
-            steps=image_result.get("steps"),
+            original_image_url=public_original_url,
+            steps=public_steps,
             duration=duration,
+            workflow_type=wf_type,
         )
 
     return image_result

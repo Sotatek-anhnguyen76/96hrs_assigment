@@ -8,6 +8,7 @@ Face similarity checked after each step; retries if score < 40 (max 2 retries).
 
 Easy to remove: delete this file, set USE_AIO_MODE=false, revert import in main.py.
 """
+import asyncio
 import copy
 import hashlib
 import json
@@ -37,6 +38,7 @@ os.makedirs(STORAGE_DIR, exist_ok=True)
 FACE_SCORE_THRESHOLD = 40
 MAX_RETRIES_PER_STEP = 2
 MAX_STEPS = 3
+MAX_PIPELINE_RETRIES = 3
 
 
 def _read_image(path: str) -> tuple[bytes, str, int, int]:
@@ -228,9 +230,63 @@ Example output: ["Change outfit to a red dress. Do not change facial features, k
 class ImageBridge:
     def __init__(self):
         self.comfyui_address = settings.COMFYUI_SERVER_ADDRESS
+        self._queue: asyncio.Queue | None = None
+        self._worker_task: asyncio.Task | None = None
         logger.info("AIO MODE ENABLED — using edit_final_AIO.json for all image tasks")
 
+    MAX_QUEUE_SIZE = 10
+
+    def _ensure_worker(self):
+        """Start the queue worker if not already running."""
+        if self._queue is None:
+            self._queue = asyncio.Queue(maxsize=self.MAX_QUEUE_SIZE)
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_task = asyncio.create_task(self._worker())
+
+    async def _worker(self):
+        """Process image generation requests one at a time."""
+        while True:
+            future, args = await self._queue.get()
+            try:
+                result = await self._generate_image_internal(**args)
+                future.set_result(result)
+            except Exception as e:
+                future.set_result({"status": "failed", "error": str(e)})
+            finally:
+                self._queue.task_done()
+
     async def generate_image(
+        self,
+        ref_image_path: str,
+        prompt: str,
+        pose_description: str | None = None,
+        outfit_description: str | None = None,
+    ) -> dict:
+        """Queue an image generation request. Returns when it's done."""
+        self._ensure_worker()
+
+        future = asyncio.get_event_loop().create_future()
+        args = {
+            "ref_image_path": ref_image_path,
+            "prompt": prompt,
+            "pose_description": pose_description,
+            "outfit_description": outfit_description,
+        }
+
+        if self._queue.full():
+            logger.warning(f"[QUEUE] Rejected — queue full ({self.MAX_QUEUE_SIZE} jobs)")
+            return {"status": "failed", "error": f"Queue full ({self.MAX_QUEUE_SIZE} jobs). Try again later."}
+
+        queue_size = self._queue.qsize()
+        if queue_size > 0:
+            logger.info(f"[QUEUE] Request queued. Position: {queue_size + 1} (waiting for {queue_size} ahead)")
+        else:
+            logger.info(f"[QUEUE] Processing immediately (no queue)")
+
+        await self._queue.put((future, args))
+        return await future
+
+    async def _generate_image_internal(
         self,
         ref_image_path: str,
         prompt: str,
@@ -252,105 +308,134 @@ class ImageBridge:
         steps = await _decompose_request(prompt, pose_description, outfit_description)
         logger.info(f"[AIO] Pipeline: {len(steps)} steps to execute")
 
-        client = ComfyUIClient(self.comfyui_address)
+        last_error = None
 
-        try:
-            client.connect()
+        for pipeline_attempt in range(1, MAX_PIPELINE_RETRIES + 1):
+            client = ComfyUIClient(self.comfyui_address)
 
-            # Upload the original ref image (stays constant for face similarity)
-            ref_data, ref_ct, w, h = _read_image(ref_image_path)
-            ref_filename = os.path.basename(ref_image_path)
-            ref_comfyui = client.upload_image(ref_filename, ref_data, ref_ct)
+            try:
+                client.connect()
 
-            # Current input starts as the ref image
-            current_input_name = ref_comfyui
-            final_image_bytes = None
-            step_results = []  # Track results per step for reporting
+                if pipeline_attempt > 1:
+                    logger.info(
+                        f"\n{'!'*50}\n"
+                        f"  PIPELINE RETRY {pipeline_attempt}/{MAX_PIPELINE_RETRIES} (previous error: {last_error})\n"
+                        f"{'!'*50}"
+                    )
 
-            for step_idx, step_prompt in enumerate(steps):
-                logger.info(f"[AIO] Step {step_idx + 1}/{len(steps)}: '{step_prompt[:60]}...'")
+                # Upload the original ref image (stays constant for face similarity)
+                ref_data, ref_ct, w, h = _read_image(ref_image_path)
+                ref_filename = os.path.basename(ref_image_path)
+                ref_comfyui = client.upload_image(ref_filename, ref_data, ref_ct)
 
-                best_image = None
-                best_score = -1.0
+                # Current input starts as the ref image
+                current_input_name = ref_comfyui
+                final_image_bytes = None
+                step_results = []  # Track results per step for reporting
 
-                for attempt in range(1 + MAX_RETRIES_PER_STEP):
-                    seed = random.randint(1, 1_000_000_000)
+                for step_idx, step_prompt in enumerate(steps):
+                    logger.info(f"[AIO] Step {step_idx + 1}/{len(steps)}: '{step_prompt[:60]}...'")
 
-                    # Use stronger face preservation on retries
-                    actual_prompt = step_prompt
-                    if attempt > 0:
-                        actual_prompt = (
-                            f"{step_prompt}. CRITICAL: preserve exact facial features, "
-                            f"do not alter face, eyes, nose, mouth, skin tone in any way"
+                    best_image = None
+                    best_score = -1.0
+
+                    for attempt in range(1 + MAX_RETRIES_PER_STEP):
+                        seed = random.randint(1, 1_000_000_000)
+
+                        # Use stronger face preservation on retries
+                        actual_prompt = step_prompt
+                        if attempt > 0:
+                            actual_prompt = (
+                                f"{step_prompt}. CRITICAL: preserve exact facial features, "
+                                f"do not alter face, eyes, nose, mouth, skin tone in any way"
+                            )
+                            logger.info(f"[AIO] Step {step_idx + 1} retry {attempt}/{MAX_RETRIES_PER_STEP}")
+
+                        workflow = _prepare_aio_workflow(
+                            AIO_WORKFLOW_TEMPLATE,
+                            input_image_name=current_input_name,
+                            ref_image_name=ref_comfyui,
+                            prompt=actual_prompt,
+                            seed=seed,
+                            width=w,
+                            height=h,
                         )
-                        logger.info(f"[AIO] Step {step_idx + 1} retry {attempt}/{MAX_RETRIES_PER_STEP}")
 
-                    workflow = _prepare_aio_workflow(
-                        AIO_WORKFLOW_TEMPLATE,
-                        input_image_name=current_input_name,
-                        ref_image_name=ref_comfyui,
-                        prompt=actual_prompt,
-                        seed=seed,
-                        width=w,
-                        height=h,
-                    )
+                        output_images = client.execute_workflow(workflow)
 
-                    output_images = client.execute_workflow(workflow)
+                        # Get output image from node 6
+                        images = (
+                            output_images.get("6")
+                            or next(iter(output_images.values()), [])
+                        )
+                        if not images:
+                            logger.warning(f"[AIO] Step {step_idx + 1} attempt {attempt + 1}: no output image")
+                            continue
 
-                    # Get output image from node 6
-                    images = (
-                        output_images.get("6")
-                        or next(iter(output_images.values()), [])
-                    )
-                    if not images:
-                        logger.warning(f"[AIO] Step {step_idx + 1} attempt {attempt + 1}: no output image")
-                        continue
+                        # Check face similarity score from node 26
+                        face_score = _parse_face_score(client)
+                        logger.info(f"[AIO] Step {step_idx + 1} attempt {attempt + 1}: face_score={face_score:.1f}")
 
-                    # Check face similarity score from node 26
-                    face_score = _parse_face_score(client)
-                    logger.info(f"[AIO] Step {step_idx + 1} attempt {attempt + 1}: face_score={face_score:.1f}")
+                        # Track the best result
+                        if face_score > best_score:
+                            best_score = face_score
+                            best_image = images[0]
 
-                    # Track the best result
-                    if face_score > best_score:
-                        best_score = face_score
-                        best_image = images[0]
+                        # Good enough — move on
+                        if face_score >= FACE_SCORE_THRESHOLD:
+                            break
 
-                    # Good enough — move on
-                    if face_score >= FACE_SCORE_THRESHOLD:
-                        break
+                    if best_image is None:
+                        raise RuntimeError(f"Step {step_idx + 1} produced no images")
 
-                if best_image is None:
-                    return {"status": "failed", "error": f"Step {step_idx + 1} produced no images"}
+                    if best_score < FACE_SCORE_THRESHOLD:
+                        logger.warning(
+                            f"[AIO] Step {step_idx + 1}: best face_score={best_score:.1f} "
+                            f"(below {FACE_SCORE_THRESHOLD}), using best attempt anyway"
+                        )
 
-                if best_score < FACE_SCORE_THRESHOLD:
-                    logger.warning(
-                        f"[AIO] Step {step_idx + 1}: best face_score={best_score:.1f} "
-                        f"(below {FACE_SCORE_THRESHOLD}), using best attempt anyway"
-                    )
+                    # Save this step's output image so it can be shown in Google Chat
+                    step_image_url = _save_output(best_image)
 
-                step_results.append({
-                    "prompt": step_prompt[:80],
-                    "face_score": best_score,
-                    "attempts": attempt + 1,
-                })
+                    step_results.append({
+                        "prompt": step_prompt[:80],
+                        "face_score": best_score,
+                        "attempts": attempt + 1,
+                        "image_url": step_image_url,
+                    })
 
-                final_image_bytes = best_image
+                    final_image_bytes = best_image
 
-                # Upload this step's output as input for the next step
-                if step_idx < len(steps) - 1:
-                    next_input_name = f"aio_step{step_idx + 1}_{uuid.uuid4().hex[:8]}.png"
-                    current_input_name = client.upload_image(
-                        next_input_name, best_image, "image/png"
-                    )
-                    logger.info(f"[AIO] Chained step {step_idx + 1} output → step {step_idx + 2} input")
+                    # Upload this step's output as input for the next step
+                    if step_idx < len(steps) - 1:
+                        next_input_name = f"aio_step{step_idx + 1}_{uuid.uuid4().hex[:8]}.png"
+                        current_input_name = client.upload_image(
+                            next_input_name, best_image, "image/png"
+                        )
+                        logger.info(f"[AIO] Chained step {step_idx + 1} output → step {step_idx + 2} input")
 
-            # Save final result
-            url = _save_output(final_image_bytes)
-            logger.info(f"[AIO] Pipeline complete: {len(steps)} steps, final image: {url}")
-            return {"status": "succeeded", "image_url": url, "steps": step_results}
+                # Save original ref image so Google Chat can show it
+                original_image_url = _save_output(ref_data)
 
-        except Exception as e:
-            logger.error(f"[AIO] Pipeline error: {e}", exc_info=True)
-            return {"status": "failed", "error": str(e)}
-        finally:
-            client.disconnect()
+                # Save final result
+                url = _save_output(final_image_bytes)
+                logger.info(f"[AIO] Pipeline complete: {len(steps)} steps, final image: {url}")
+                return {
+                    "status": "succeeded",
+                    "image_url": url,
+                    "steps": step_results,
+                    "original_image_url": original_image_url,
+                }
+
+            except Exception as e:
+                last_error = str(e)
+                logger.error(f"[AIO] Pipeline attempt {pipeline_attempt}/{MAX_PIPELINE_RETRIES} failed: {e}")
+                if pipeline_attempt < MAX_PIPELINE_RETRIES:
+                    logger.info(f"[AIO] Will retry entire pipeline...")
+                else:
+                    logger.error(f"[AIO] All {MAX_PIPELINE_RETRIES} pipeline attempts failed", exc_info=True)
+                    return {"status": "failed", "error": last_error}
+            finally:
+                client.disconnect()
+
+        return {"status": "failed", "error": last_error}

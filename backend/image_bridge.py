@@ -146,8 +146,9 @@ class ImageBridge:
                 return {"status": "failed", "error": "No images from pose workflow"}
 
             url = _save_output(images[0])
+            original_image_url = _save_output(ref_data)
             logger.info(f"Pose workflow complete: {url}")
-            return {"status": "succeeded", "image_url": url}
+            return {"status": "succeeded", "image_url": url, "original_image_url": original_image_url}
 
         except Exception as e:
             logger.error(f"Pose workflow error: {e}", exc_info=True)
@@ -188,8 +189,9 @@ class ImageBridge:
                 return {"status": "failed", "error": "No images from outfit workflow"}
 
             url = _save_output(images[0])
+            original_image_url = _save_output(ref_data)
             logger.info(f"Outfit workflow complete: {url}")
-            return {"status": "succeeded", "image_url": url}
+            return {"status": "succeeded", "image_url": url, "original_image_url": original_image_url}
 
         except Exception as e:
             logger.error(f"Outfit workflow error: {e}", exc_info=True)

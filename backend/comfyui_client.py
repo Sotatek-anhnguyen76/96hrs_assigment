@@ -89,8 +89,8 @@ class ComfyUIClient:
                 if msg_type == "executed":
                     # Capture text outputs (e.g. face similarity from PreviewAny)
                     node_id = data.get("node")
-                    output = data.get("output", {})
-                    if node_id and "text" in output:
+                    output = data.get("output") or {}
+                    if node_id and isinstance(output, dict) and "text" in output:
                         text_val = output["text"]
                         if isinstance(text_val, list):
                             text_val = text_val[0] if text_val else ""
