@@ -171,7 +171,8 @@ async def _decompose_request(
 RULES:
 - Maximum {MAX_STEPS} steps
 - Each step is a single, focused edit instruction that the AI image editor can execute
-- Order: pose changes FIRST, then outfit/clothing, then scene/background/lighting LAST
+- Order: pose changes FIRST, then outfit/clothing, then scene/background LAST
+- Do NOT add lighting or illumination instructions unless the user explicitly asks for specific lighting. Let the model decide lighting naturally.
 - Each step must include "Do not change facial features, keep face identity, hair style, body proportion, legs, belly, etc if user prompt don't mention" at the end
 - Only include steps that are actually needed. If the request is just about outfit, return 1 step.
 - Keep each step prompt under 30 words
@@ -187,7 +188,7 @@ Use switch 3 (multiConceptNSFW) for female picture. Only use switch 2 when the O
 Respond with ONLY a JSON array of objects, each with "prompt" and "switch" keys. Nothing else.
 
 Example input: "wearing bikini, at the mountain, standing with arms raised"
-Example output: [{{"prompt": "Change pose to standing with arms raised. Do not change facial features, keep face identity", "switch": 1}}, {{"prompt": "Change outfit to bikini. Do not change facial features, keep face identity", "switch": 1}}, {{"prompt": "Change background to mountain scenery with natural lighting. Do not change facial features, keep face identity", "switch": 1}}]
+Example output: [{{"prompt": "Change pose to standing with arms raised. Do not change facial features, keep face identity", "switch": 1}}, {{"prompt": "Change outfit to bikini. Do not change facial features, keep face identity", "switch": 1}}, {{"prompt": "Change background to mountain scenery. Do not change facial features, keep face identity", "switch": 1}}]
 
 Example input: "wearing a red dress"
 Example output: [{{"prompt": "Change outfit to a red dress. Do not change facial features, keep face identity", "switch": 1}}]
