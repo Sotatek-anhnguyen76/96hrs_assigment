@@ -16,6 +16,7 @@ from config import settings
 from chat_service import ChatService
 from character_profiles import get_character, CHARACTERS
 from cost_logger import get_session_summary
+from google_chat import send_generation_result, send_text_only
 
 # AIO testing mode: swap to single-workflow image bridge
 if settings.USE_AIO_MODE:
@@ -151,21 +152,48 @@ async def chat(request: ChatRequest):
     if chat_result["send_image"] and (chat_result.get("image_context") or chat_result.get("pose_description") or chat_result.get("outfit_description")):
         response.image_generating = True
         try:
+            import time
+            t0 = time.monotonic()
+
             image_result = await image_bridge.generate_image(
                 ref_image_path=character["ref_image"],
                 prompt=chat_result.get("image_context", ""),
                 pose_description=chat_result.get("pose_description"),
                 outfit_description=chat_result.get("outfit_description"),
             )
+
+            duration = time.monotonic() - t0
+
             if image_result["status"] == "succeeded":
                 response.image_url = image_result["image_url"]
                 response.image_generating = False
+
+                # Send to Google Chat
+                public_image_url = None
+                if response.image_url:
+                    # Build public URL from tunnel/host for Google Chat
+                    public_image_url = response.image_url  # relative path
+                send_generation_result(
+                    character_name=character["chat_name"],
+                    user_message=request.message,
+                    ai_message=chat_result["message"],
+                    image_url=public_image_url,
+                    steps=image_result.get("steps"),
+                    duration=duration,
+                )
             else:
                 logger.error(f"Image generation failed: {image_result.get('error')}")
                 response.image_generating = False
         except Exception as e:
             logger.error(f"Image bridge error: {e}")
             response.image_generating = False
+    else:
+        # Text-only message — notify Google Chat
+        send_text_only(
+            character_name=character["chat_name"],
+            user_message=request.message,
+            ai_message=chat_result["message"],
+        )
 
     return response
 

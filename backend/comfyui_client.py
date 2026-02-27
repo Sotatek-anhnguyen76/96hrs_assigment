@@ -22,6 +22,7 @@ class ComfyUIClient:
         self.client_id = str(uuid.uuid4())
         self._ws: Optional[websocket.WebSocket] = None
         self._last_prompt_id: Optional[str] = None
+        self._ws_text_outputs: dict[str, str] = {}  # node_id → text from WS "executed" msgs
 
     def connect(self):
         ws_url = f"ws://{self.server_address}/ws?clientId={self.client_id}"
@@ -74,6 +75,9 @@ class ComfyUIClient:
 
         logger.info(f"Queued workflow: {prompt_id}")
 
+        # Reset captured text outputs for this run
+        self._ws_text_outputs = {}
+
         # Wait for completion via WebSocket
         while True:
             out = self._ws.recv()
@@ -82,7 +86,18 @@ class ComfyUIClient:
                 msg_type = msg.get("type")
                 data = msg.get("data", {})
 
-                if msg_type == "executing":
+                if msg_type == "executed":
+                    # Capture text outputs (e.g. face similarity from PreviewAny)
+                    node_id = data.get("node")
+                    output = data.get("output", {})
+                    if node_id and "text" in output:
+                        text_val = output["text"]
+                        if isinstance(text_val, list):
+                            text_val = text_val[0] if text_val else ""
+                        self._ws_text_outputs[node_id] = str(text_val).strip()
+                        logger.info(f"[WS] Node {node_id} text output: {self._ws_text_outputs[node_id]}")
+
+                elif msg_type == "executing":
                     if data.get("node") is None and data.get("prompt_id") == prompt_id:
                         break
                 elif msg_type == "execution_error":
@@ -183,7 +198,16 @@ class ComfyUIClient:
         return wf
 
     def get_text_output(self, node_id: str) -> str | None:
-        """Get text output from a node (e.g. PreviewAny) in the last executed workflow."""
+        """Get text output from a node (e.g. PreviewAny).
+
+        Prefers data captured from WebSocket 'executed' messages (reliable).
+        Falls back to history API.
+        """
+        # Prefer WebSocket-captured data (this is how PreviewAny sends data)
+        if node_id in self._ws_text_outputs:
+            return self._ws_text_outputs[node_id]
+
+        # Fallback: history API
         if not self._last_prompt_id:
             return None
         try:
@@ -191,7 +215,6 @@ class ComfyUIClient:
             history = json.loads(urllib.request.urlopen(url).read())
             outputs = history.get(self._last_prompt_id, {}).get("outputs", {})
             node_output = outputs.get(node_id, {})
-            # PreviewAny stores in "text" field
             text_list = node_output.get("text", [])
             if text_list:
                 return str(text_list[0])

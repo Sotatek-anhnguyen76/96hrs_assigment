@@ -114,13 +114,21 @@ def _prepare_aio_workflow(
 
 
 def _parse_face_score(client: ComfyUIClient) -> float:
-    """Extract face similarity score from node 26 (PreviewAny)."""
+    """Extract face similarity score from node 26 (PreviewAny) via WebSocket."""
     raw = client.get_text_output("26")
     if raw is None:
-        logger.warning("[AIO] No face score returned, assuming 100")
+        logger.warning("[AIO] No face score returned from node 26, assuming 100")
         return 100.0
     try:
-        return float(raw)
+        score = float(raw)
+        # Prominent terminal display
+        status = "PASS" if score >= FACE_SCORE_THRESHOLD else "FAIL"
+        logger.info(
+            f"\n{'='*50}\n"
+            f"  FACE SIMILARITY: {score:.2f}%  [{status}]  (threshold: {FACE_SCORE_THRESHOLD})\n"
+            f"{'='*50}"
+        )
+        return score
     except (ValueError, TypeError):
         logger.warning(f"[AIO] Could not parse face score: '{raw}', assuming 100")
         return 100.0
@@ -257,6 +265,7 @@ class ImageBridge:
             # Current input starts as the ref image
             current_input_name = ref_comfyui
             final_image_bytes = None
+            step_results = []  # Track results per step for reporting
 
             for step_idx, step_prompt in enumerate(steps):
                 logger.info(f"[AIO] Step {step_idx + 1}/{len(steps)}: '{step_prompt[:60]}...'")
@@ -319,6 +328,12 @@ class ImageBridge:
                         f"(below {FACE_SCORE_THRESHOLD}), using best attempt anyway"
                     )
 
+                step_results.append({
+                    "prompt": step_prompt[:80],
+                    "face_score": best_score,
+                    "attempts": attempt + 1,
+                })
+
                 final_image_bytes = best_image
 
                 # Upload this step's output as input for the next step
@@ -332,7 +347,7 @@ class ImageBridge:
             # Save final result
             url = _save_output(final_image_bytes)
             logger.info(f"[AIO] Pipeline complete: {len(steps)} steps, final image: {url}")
-            return {"status": "succeeded", "image_url": url}
+            return {"status": "succeeded", "image_url": url, "steps": step_results}
 
         except Exception as e:
             logger.error(f"[AIO] Pipeline error: {e}", exc_info=True)
