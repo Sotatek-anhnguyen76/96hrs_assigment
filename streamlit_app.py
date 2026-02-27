@@ -197,7 +197,7 @@ elif not st.session_state.chat_started:
             key="custom_upload",
         )
         if uploaded_file is not None:
-            file_bytes = uploaded_file.read()
+            file_bytes = uploaded_file.getvalue()
             st.image(file_bytes, caption="Preview", width=200)
             if st.button("Upload Image", type="primary"):
                 result = upload_custom_image(file_bytes, uploaded_file.name)
