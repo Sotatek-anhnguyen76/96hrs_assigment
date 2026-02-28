@@ -237,7 +237,7 @@ async def get_avatar(character_id: str):
     ref_path = character.get("ref_image", "")
     if not os.path.exists(ref_path):
         raise HTTPException(status_code=404, detail="Avatar not found")
-    return FileResponse(ref_path)
+    return FileResponse(ref_path, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/characters/upload-image")

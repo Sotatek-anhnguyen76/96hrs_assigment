@@ -171,7 +171,11 @@ with st.sidebar:
 
         col_img, col_btn = st.columns([1, 3])
         with col_img:
-            if char.get("avatar_url"):
+            # Prefer local preview bytes for custom chars (avoids browser cache)
+            preview = st.session_state.get(f"custom_image_preview_{char['id']}")
+            if preview:
+                st.image(preview, width=50)
+            elif char.get("avatar_url"):
                 st.image(full_image_url(char["avatar_url"]), width=50)
         with col_btn:
             if st.button(
@@ -250,9 +254,9 @@ elif not st.session_state.chat_started:
                 if result and result.get("status") == "ok":
                     st.success("Image uploaded successfully!")
                     st.session_state[f"custom_image_preview_{char['id']}"] = file_bytes
-                    # Update selected character so it reflects the upload
+                    # Cache-bust: append timestamp so browser fetches the new image
                     char["has_ref_image"] = True
-                    char["avatar_url"] = f"/avatar/{char['id']}"
+                    char["avatar_url"] = f"/avatar/{char['id']}?v={int(time.time())}"
                     st.session_state.selected_character = char
                     # Clear character cache so sidebar refreshes
                     fetch_characters.clear()
@@ -291,8 +295,9 @@ else:
 
     st.title(char_name)
 
-    # Get avatar URL for chat messages
-    char_avatar = full_image_url(char.get("avatar_url")) if char.get("avatar_url") else None
+    # Get avatar for chat messages — prefer local preview bytes for custom chars
+    _preview = st.session_state.get(f"custom_image_preview_{char['id']}")
+    char_avatar = _preview if _preview else (full_image_url(char.get("avatar_url")) if char.get("avatar_url") else None)
 
     # Build persona override to send with each request
     persona_override = {k: v for k, v in persona.items() if v is not None} if persona else None
