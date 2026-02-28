@@ -233,7 +233,7 @@ RULES:
 - Minimum steps needed. Single-aspect request = 1 step.
 - Order: pose FIRST, then outfit, then background LAST.
 - No lighting changes unless user explicitly asks.
-- Each step prompt: under 30 words, end with "Do not change facial features, keep face identity".
+- Each step prompt: under 30 words, end with "Do not change facial features, keep face identity, normalize any bad anatomy".
 
 LORA SWITCH per step:
 - 1 = SFW (outfit, pose, background, normal scenes)

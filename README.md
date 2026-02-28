@@ -52,6 +52,19 @@ These tools are designed for older models (SDXL, etc.) and do not work with the 
 - **Grok** — chatbot character, orchestrator, prompt generator, and LoRA selector
 - **Streamlit** — chat UI with character selection, persona editing, and image display
 
+### AIO Workflow (`AIO.json`)
+
+The primary image generation uses the `AIO.json` ComfyUI workflow (`USE_AIO_MODE=true`). This single workflow handles all editing steps (background, pose, outfit) in a unified pipeline:
+
+1. **Load Checkpoint** — loads the `Qwen-Rapid-AIO-NSFW` model
+2. **Prompt Encoding** — `TextEncodeQwenImageEditPlus` encodes the edit instruction
+3. **LoRA Switch** — `ImpactSwitch` selects the appropriate LoRA per step (1 = none/SFW, 2 = PenisLora, 3 = MCNL NSFW)
+4. **IPAdapter FaceID** — injects the character's face identity into the generation
+5. **KSampler** — runs the diffusion edit (8 steps, euler_ancestral, denoise 0.9)
+6. **Face Similarity** — compares the output face against the reference image and returns a score
+
+The backend runs this workflow once per editing step. Each step's output image becomes the input for the next step, forming the chain-of-edit.
+
 ### Job-Based Async Image Generation
 
 Image generation uses a job-based polling pattern to avoid Cloudflare tunnel timeouts:
