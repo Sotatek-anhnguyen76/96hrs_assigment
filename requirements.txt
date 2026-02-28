@@ -1,0 +1,29 @@
+# =============================================================================
+# Frontend Demo — Python dependencies
+# Backend (FastAPI) + Frontend (Streamlit)
+# Install: pip install -r requirements.txt
+# =============================================================================
+
+# --- Web framework (backend) ---
+fastapi>=0.115.6
+uvicorn>=0.34.0
+python-multipart
+
+# --- HTTP / networking ---
+httpx>=0.28.1
+requests>=2.32.3
+websocket-client>=1.8.0
+
+# --- Data validation / config ---
+pydantic>=2.10.4
+pydantic-settings>=2.7.1
+python-dotenv>=1.0.1
+
+# --- Image processing ---
+Pillow>=11.1.0
+
+# --- Frontend ---
+streamlit>=1.28.0
+
+# --- Supabase Storage (image uploads) ---
+supabase>=2.0.0
