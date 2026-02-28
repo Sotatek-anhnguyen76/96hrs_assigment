@@ -76,6 +76,7 @@ Image generation uses a job-based polling pattern to avoid Cloudflare tunnel tim
 ## Project Structure
 
 ```
+├── setup.sh                    # Full setup — install deps + download models
 ├── start.sh                    # One-command launcher (tmux + cloudflared)
 ├── requirements.txt            # All Python deps (backend + Streamlit)
 ├── streamlit_app.py            # Streamlit chat frontend
@@ -108,7 +109,12 @@ Image generation uses a job-based polling pattern to avoid Cloudflare tunnel tim
 │   ├── Marco.jpg
 │   ├── ...
 │   └── uploads/                # User-uploaded custom character images
-└── comfyui_custom_nodes/       # ComfyUI custom nodes (47 packages)
+└── ComfyUI/                    # ComfyUI server (models/ excluded via .gitignore)
+    ├── main.py                 # ComfyUI entry point
+    ├── nodes.py                # Built-in node definitions
+    ├── comfy/                  # Core ComfyUI library
+    ├── custom_nodes/           # 47 custom node packages
+    └── models/                 # (gitignored — download separately)
 ```
 
 ## Characters
@@ -156,17 +162,16 @@ Users can also upload their own reference images for custom characters.
 ### Prerequisites
 
 - Python 3.11+ (conda `comfy` environment recommended)
-- ComfyUI with the Qwen edit model and custom nodes loaded
 - xAI API key (for Grok)
 - `tmux` and `cloudflared` installed
 
-### 1. Install Dependencies
+### 1. Run Setup
 
 ```bash
-pip install -r requirements.txt
+bash setup.sh
 ```
 
-This single file covers both backend (FastAPI) and frontend (Streamlit) dependencies.
+Installs all Python dependencies and downloads required models.
 
 ### 2. Configure Environment
 

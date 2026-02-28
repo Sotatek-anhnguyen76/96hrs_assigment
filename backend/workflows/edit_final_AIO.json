@@ -61,7 +61,7 @@
   },
   "4": {
     "inputs": {
-      "prompt": "blurry, low quality, low resolution,\ndistorted face, altered identity,\nbad anatomy, deformed hands, extra fingers,\nwarped body, unnatural proportions,\nharsh lighting, inconsistent lighting,\nbackground artifacts, edge artifacts,\ntext, watermark, logo, mutation limbs, unnatural limb postion",
+      "prompt": "blurry, low quality, low resolution,\ndistorted face, altered identity,\nbad anatomy, anatomical distortion, limb duplication, deformed hands, extra fingers,\nwarped body, unnatural proportions,\nharsh lighting, inconsistent lighting,\nbackground artifacts, edge artifacts,\ntext, watermark, logo, mutation limbs, unnatural limb postion",
       "clip": [
         "1",
         1
