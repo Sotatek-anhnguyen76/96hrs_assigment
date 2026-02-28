@@ -75,6 +75,9 @@ Image generation uses a job-based polling pattern to avoid Cloudflare tunnel tim
 ## Project Structure
 
 ```
+├── start.sh                    # One-command launcher (tmux + cloudflared)
+├── requirements.txt            # All Python deps (backend + Streamlit)
+├── streamlit_app.py            # Streamlit chat frontend
 ├── backend/
 │   ├── main.py                 # FastAPI app — all endpoints
 │   ├── chat_service.py         # Grok chat with intent detection
@@ -87,7 +90,6 @@ Image generation uses a job-based polling pattern to avoid Cloudflare tunnel tim
 │   ├── telegram_notify.py      # Telegram image delivery
 │   ├── google_chat.py          # Google Chat webhook integration
 │   ├── pose_generator.py       # Pose generation utilities
-│   ├── requirements.txt        # Backend Python dependencies
 │   └── workflows/
 │       ├── AIO.json            # All-in-one edit workflow
 │       ├── Outfit.json         # Outfit change workflow
@@ -99,8 +101,6 @@ Image generation uses a job-based polling pattern to avoid Cloudflare tunnel tim
 │   │   └── components/
 │   ├── package.json
 │   └── ...
-├── streamlit_app.py            # Streamlit chat frontend
-├── streamlit_requirements.txt
 ├── character/                  # Character reference images
 │   ├── Luna.jpeg
 │   ├── Sofia.jpeg
@@ -154,18 +154,22 @@ Users can also upload their own reference images for custom characters.
 
 ### Prerequisites
 
-- Python 3.11+
-- ComfyUI running on `127.0.0.1:8188` with the Qwen edit model loaded
+- Python 3.11+ (conda `comfy` environment recommended)
+- ComfyUI with the Qwen edit model and custom nodes loaded
 - xAI API key (for Grok)
+- `tmux` and `cloudflared` installed
 
-### Backend
+### 1. Install Dependencies
 
 ```bash
-cd backend
 pip install -r requirements.txt
 ```
 
-Create a `.env` file:
+This single file covers both backend (FastAPI) and frontend (Streamlit) dependencies.
+
+### 2. Configure Environment
+
+Create `backend/.env`:
 
 ```env
 XAI_API_KEY=your-xai-api-key
@@ -173,22 +177,39 @@ COMFYUI_SERVER_ADDRESS=127.0.0.1:8188
 USE_AIO_MODE=true
 ```
 
-Run the backend:
+### 3. Start All Services
 
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8000
+bash start.sh
 ```
 
-### Streamlit Frontend
+This launches everything in a **tmux session** with 3 panes:
+
+| Pane | Service | Port |
+|------|---------|------|
+| 0 | FastAPI backend | `8000` |
+| 1 | Cloudflare tunnel | auto |
+| 2 | Streamlit frontend | `8501` |
+
+The script also:
+- Starts ComfyUI automatically if not already running (via `edgaras_IMAGE/start.sh`)
+- Waits for ComfyUI to be ready on port `8188`
+- Captures the Cloudflare tunnel URL and writes it to `.streamlit/secrets.toml`
+
+Use `--no-comfy` to skip starting ComfyUI if it's already running:
 
 ```bash
-pip install -r streamlit_requirements.txt
-streamlit run streamlit_app.py
+bash start.sh --no-comfy
 ```
 
-Set `API_URL` in Streamlit secrets or as an environment variable pointing to the backend URL.
+### Managing the Session
 
-### Next.js Frontend
+```bash
+tmux attach -t nectar      # Attach to the session
+tmux kill-session -t nectar # Stop all services
+```
+
+### Next.js Frontend (optional)
 
 ```bash
 cd frontend
