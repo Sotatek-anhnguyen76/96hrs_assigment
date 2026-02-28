@@ -22,7 +22,6 @@ The Qwen edit model is plugged with specialized LoRAs:
 |------|---------|
 | **MCNL** (Multi Concept NSFW Lora) | NSFW content generation for female characters |
 | **PenisLora** | NSFW content generation for male characters |
-| **Denoising reduction LoRA** | Speeds up generation by reducing denoising steps |
 
 Grok selects which LoRA is appropriate for each generation step. The backend overrides the LoRA switch, positive prompt, and image dimensions per step.
 
