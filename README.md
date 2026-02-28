@@ -46,18 +46,6 @@ These tools are designed for older models (SDXL, etc.) and do not work with the 
 
 ## Architecture
 
-```
-┌──────────────┐       ┌──────────────────┐       ┌─────────────┐
-│   Frontend   │──────▶│  FastAPI Backend  │──────▶│   ComfyUI   │
-│  (Streamlit) │◀──────│   (Python)       │◀──────│  (localhost) │
-└──────────────┘       └────────┬─────────┘       └─────────────┘
-                                │
-                        ┌───────▼───────┐
-                        │   Grok API    │
-                        │  (xAI / Chat  │
-                        │  + Orchestrate)│
-                        └───────────────┘
-```
 
 - **ComfyUI** — serves the Qwen edit model and workflows
 - **FastAPI backend** — handles user requests, queues image generation jobs to ComfyUI
