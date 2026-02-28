@@ -3,6 +3,7 @@ Image generation — talks directly to ComfyUI.
 Uses the pose workflow: character ref image + xAI-generated pose reference.
 Falls back to the outfit workflow (SAM3 segmentation) if no pose description is provided.
 """
+import asyncio
 import hashlib
 import json
 import logging
@@ -69,6 +70,8 @@ class ImageBridge:
         prompt: str,
         pose_description: str | None = None,
         outfit_description: str | None = None,
+        gender: str = "woman",
+        user_message: str | None = None,
     ) -> dict:
         """
         Generate a character image using ComfyUI.
@@ -103,28 +106,30 @@ class ImageBridge:
 
     async def _run_pose_workflow(self, ref_image_path: str, pose_description: str) -> dict:
         """Generate image using pose workflow: ref image + xAI-generated pose image."""
+        # Step 1: Generate pose reference image via xAI (async / non-blocking)
+        logger.info(f"Generating pose reference: '{pose_description[:60]}...'")
+        pose_bytes = await generate_pose_image(pose_description)
+
+        # Step 2+3: blocking ComfyUI work → run in thread
+        return await asyncio.to_thread(
+            self._pose_comfyui, ref_image_path, pose_bytes,
+        )
+
+    def _pose_comfyui(self, ref_image_path: str, pose_bytes: bytes) -> dict:
+        """Blocking pose workflow — runs in a worker thread."""
         client = ComfyUIClient(self.comfyui_address)
-
         try:
-            # Step 1: Generate pose reference image via xAI
-            logger.info(f"Generating pose reference: '{pose_description[:60]}...'")
-            pose_bytes = await generate_pose_image(pose_description)
-
-            # Step 2: Connect to ComfyUI and upload both images
             client.connect()
 
-            # Upload character reference image
             ref_data, ref_ct, _, _ = _read_image(ref_image_path)
             ref_filename = os.path.basename(ref_image_path)
             ref_comfyui = client.upload_image(ref_filename, ref_data, ref_ct)
             logger.info(f"Uploaded character ref: {ref_comfyui}")
 
-            # Upload generated pose reference image
             pose_filename = f"pose_{uuid.uuid4().hex[:8]}.png"
             pose_comfyui = client.upload_image(pose_filename, pose_bytes, "image/png")
             logger.info(f"Uploaded pose ref: {pose_comfyui}")
 
-            # Step 3: Prepare and run pose workflow
             seed = random.randint(1, 1_000_000_000)
             workflow = ComfyUIClient.prepare_pose_workflow(
                 POSE_WORKFLOW_TEMPLATE,
@@ -136,7 +141,6 @@ class ImageBridge:
             logger.info(f"Running pose workflow: seed={seed}")
             output_images = client.execute_workflow(workflow)
 
-            # Node 164 = PreviewImage output in pose workflow
             images = (
                 output_images.get("164")
                 or output_images.get("8")
@@ -158,8 +162,13 @@ class ImageBridge:
 
     async def _run_outfit_workflow(self, ref_image_path: str, prompt: str) -> dict:
         """Outfit workflow: SAM3 segmentation-based outfit editing."""
-        client = ComfyUIClient(self.comfyui_address)
+        return await asyncio.to_thread(
+            self._outfit_comfyui, ref_image_path, prompt,
+        )
 
+    def _outfit_comfyui(self, ref_image_path: str, prompt: str) -> dict:
+        """Blocking outfit workflow — runs in a worker thread."""
+        client = ComfyUIClient(self.comfyui_address)
         try:
             client.connect()
 
@@ -180,7 +189,6 @@ class ImageBridge:
             logger.info(f"Running outfit workflow: prompt='{prompt[:60]}...' seed={seed}")
             output_images = client.execute_workflow(workflow)
 
-            # Node 116 = PreviewImage output in outfit workflow
             images = (
                 output_images.get("116")
                 or next(iter(output_images.values()), [])

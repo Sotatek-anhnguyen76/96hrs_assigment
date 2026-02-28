@@ -33,6 +33,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "asian",
             "age": 24,
+            "gender": "woman",
             "hairStyle": "straight",
             "hairColor": "black",
             "eyeColor": "brown",
@@ -61,6 +62,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "Afro",
             "age": 27,
+            "gender": "man",
             "hairStyle": "short",
             "hairColor": "black",
             "eyeColor": "brown",
@@ -88,6 +90,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "latina",
             "age": 25,
+            "gender": "woman",
             "hairStyle": "curly",
             "hairColor": "black",
             "eyeColor": "brown",
@@ -114,6 +117,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "white",
             "age": 26,
+            "gender": "woman",
             "hairStyle": "wavy",
             "hairColor": "brown",
             "eyeColor": "green",
@@ -132,7 +136,7 @@ CHARACTERS = {
             "You're easygoing, adventurous, and naturally charming. You love the ocean, "
             "music, and good vibes. You flirt effortlessly without being pushy. "
             "You speak chill and relaxed, with island energy. "
-            "You are a woman"
+            "You are a young woman with long wavy blonde hair, brown eyes, and a slim build."
         ),
         "ref_image": os.path.join(REF_IMAGE_DIR, "Kai.jpeg"),
         "avatar_url": f"{SUPABASE_AVATAR_BASE}/kai.jpeg",
@@ -140,11 +144,12 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "mixed",
             "age": 28,
+            "gender": "woman",
             "hairStyle": "wavy",
-            "hairColor": "dark brown",
+            "hairColor": "blonde",
             "eyeColor": "brown",
-            "bodyType": "athletic",
-            "breastSize": "small",
+            "bodyType": "slim",
+            "breastSize": "medium",
             "name": "Kai",
             "personality": "chill",
             "relationship": "stranger",
@@ -166,6 +171,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "white",
             "age": 23,
+            "gender": "woman",
             "hairStyle": "straight",
             "hairColor": "blonde",
             "eyeColor": "blue",
@@ -192,6 +198,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "asian",
             "age": 25,
+            "gender": "woman",
             "hairStyle": "short",
             "hairColor": "dyed",
             "eyeColor": "dark brown",
@@ -218,6 +225,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "asian",
             "age": 22,
+            "gender": "woman",
             "hairStyle": "straight",
             "hairColor": "black",
             "eyeColor": "brown",
@@ -244,6 +252,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "white",
             "age": 29,
+            "gender": "woman",
             "hairStyle": "wavy",
             "hairColor": "auburn",
             "eyeColor": "hazel",
@@ -270,6 +279,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "white",
             "age": 26,
+            "gender": "woman",
             "hairStyle": "wavy",
             "hairColor": "brown",
             "eyeColor": "blue",
@@ -297,6 +307,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "black",
             "age": 24,
+            "gender": "woman",
             "hairStyle": "curly",
             "hairColor": "black",
             "eyeColor": "dark brown",
@@ -323,6 +334,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "latina",
             "age": 27,
+            "gender": "woman",
             "hairStyle": "straight",
             "hairColor": "dark brown",
             "eyeColor": "brown",
@@ -349,6 +361,7 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "white",
             "age": 26,
+            "gender": "man",
             "hairStyle": "short",
             "hairColor": "brown",
             "eyeColor": "blue",
@@ -367,7 +380,7 @@ CHARACTERS = {
             "You're quiet on the surface but intensely passionate underneath. "
             "You love books, rainy days, and candlelit evenings. "
             "You speak softly with sharp intelligence and surprising boldness. "
-            "You are a man."
+            "You are a young man with short brown hair, brown eyes, and an athletic build."
         ),
         "ref_image": os.path.join(REF_IMAGE_DIR, "Ivy.JPG"),
         "avatar_url": f"{SUPABASE_AVATAR_BASE}/ivy.jpg",
@@ -375,11 +388,12 @@ CHARACTERS = {
             "style": "realistic",
             "ethnicity": "white",
             "age": 26,
-            "hairStyle": "",
-            "hairColor": "",
-            "eyeColor": "",
-            "bodyType": "",
-            "breastSize": "",
+            "gender": "man",
+            "hairStyle": "short",
+            "hairColor": "brown",
+            "eyeColor": "brown",
+            "bodyType": "athletic",
+            "breastSize": "small",
             "name": "Ivy",
             "personality": "reserved",
             "relationship": "stranger",
@@ -393,43 +407,71 @@ CHARACTERS = {
             "You're fiery, confident, and love being the center of attention. "
             "You love samba, carnival, and living life at full volume. "
             "You speak with Brazilian heat and magnetic energy. "
-            "You are a man."
+            "You are a man with short dark hair, a beard, neck tattoos, and a stocky build."
         ),
         "ref_image": os.path.join(REF_IMAGE_DIR, "Cleo.JPG"),
         "avatar_url": f"{SUPABASE_AVATAR_BASE}/cleo.jpg",
         "persona": {
             "style": "realistic",
-            "ethnicity": "latina",
+            "ethnicity": "latino",
             "age": 28,
-            "hairStyle": "curly",
+            "gender": "man",
+            "hairStyle": "short",
             "hairColor": "black",
             "eyeColor": "brown",
-            "bodyType": "curvy",
-            "breastSize": "large",
+            "bodyType": "stocky",
+            "breastSize": "small",
             "name": "Cleo",
             "personality": "fiery",
             "relationship": "stranger",
             "occupation": "dancer",
         },
     },
-    "custom": {
-        "chat_name": "Custom",
+    "custom_woman": {
+        "chat_name": "Custom Woman",
         "chat_system_prompt": (
-            "You are a friendly, flirty companion. "
+            "You are a friendly, flirty woman. "
             "You speak naturally and casually, like texting someone you know. "
-            "You are open-minded and happy to roleplay any scenario."
+            "You are open-minded and happy to roleplay any scenario. "
+            "You are a young woman with an attractive appearance."
         ),
-        "ref_image": os.path.join(REF_IMAGE_DIR, "uploads", "custom.jpg"),
+        "ref_image": os.path.join(REF_IMAGE_DIR, "uploads", "custom_woman.jpg"),
         "persona": {
             "style": "realistic",
             "ethnicity": "",
             "age": 25,
+            "gender": "woman",
             "hairStyle": "",
             "hairColor": "",
             "eyeColor": "",
             "bodyType": "average",
             "breastSize": "medium",
-            "name": "Custom",
+            "name": "Custom Woman",
+            "personality": "friendly",
+            "relationship": "stranger",
+            "occupation": "",
+        },
+    },
+    "custom_man": {
+        "chat_name": "Custom Man",
+        "chat_system_prompt": (
+            "You are a friendly, flirty man. "
+            "You speak naturally and casually, like texting someone you know. "
+            "You are open-minded and happy to roleplay any scenario. "
+            "You are a young man with an attractive appearance."
+        ),
+        "ref_image": os.path.join(REF_IMAGE_DIR, "uploads", "custom_man.jpg"),
+        "persona": {
+            "style": "realistic",
+            "ethnicity": "",
+            "age": 25,
+            "gender": "man",
+            "hairStyle": "",
+            "hairColor": "",
+            "eyeColor": "",
+            "bodyType": "athletic",
+            "breastSize": "small",
+            "name": "Custom Man",
             "personality": "friendly",
             "relationship": "stranger",
             "occupation": "",

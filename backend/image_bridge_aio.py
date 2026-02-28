@@ -16,6 +16,7 @@ import logging
 import os
 import random
 import uuid
+from datetime import datetime, timezone
 from io import BytesIO
 
 import httpx
@@ -26,6 +27,18 @@ from comfyui_client import ComfyUIClient
 from cost_logger import log_chat_call
 
 logger = logging.getLogger(__name__)
+
+# --- Local file logger for raw Grok AIO output (shares file with chat_service) ---
+_LOG_DIR = os.path.dirname(os.path.abspath(__file__))
+_GROK_LOG_PATH = os.path.join(_LOG_DIR, "grok_output.log")
+
+_file_logger = logging.getLogger("grok_output_aio")
+_file_logger.setLevel(logging.DEBUG)
+_file_logger.propagate = False
+if not _file_logger.handlers:
+    _fh = logging.FileHandler(_GROK_LOG_PATH, encoding="utf-8")
+    _fh.setFormatter(logging.Formatter("%(message)s"))
+    _file_logger.addHandler(_fh)
 
 _dir = os.path.dirname(__file__)
 
@@ -38,7 +51,7 @@ os.makedirs(STORAGE_DIR, exist_ok=True)
 FACE_SCORE_THRESHOLD = 40
 MAX_RETRIES_PER_STEP = 2
 MAX_STEPS = 3
-MAX_PIPELINE_RETRIES = 3
+MAX_PIPELINE_RETRIES = 1
 
 
 def _read_image(path: str) -> tuple[bytes, str, int, int]:
@@ -147,6 +160,8 @@ async def _decompose_request(
     image_context: str | None,
     pose_description: str | None,
     outfit_description: str | None,
+    gender: str = "woman",
+    user_message: str | None = None,
 ) -> list[dict]:
     """Call Grok to decompose the user's image request into sequential editing steps.
 
@@ -154,6 +169,9 @@ async def _decompose_request(
     """
     # Build context from what the chat service returned
     parts = []
+    parts.append(f"Subject gender: {gender}")
+    if user_message:
+        parts.append(f"User said: {user_message}")
     if pose_description:
         parts.append(f"Pose: {pose_description}")
     if outfit_description:
@@ -166,41 +184,40 @@ async def _decompose_request(
 
     user_request = ". ".join(parts)
 
-    system_prompt = f"""You are an image editing director. Given a user's image request, break it into sequential editing steps for an AI image editor.
+    system_prompt = f"""Break the user's image request into 1-{MAX_STEPS} sequential editing steps for an AI image editor. Subject: {gender}.
+
+INPUT FORMAT — the request contains these fields (some may be absent):
+- "User said:" — the original chat message from the user
+- "Pose:" — specific body pose to apply (from chat intent detection)
+- "Outfit:" — clothing or nudity description (from chat intent detection)
+- "Scene/context:" — environment, background, or mood description
+Use ALL provided fields. If Pose is given, create a pose step. If Outfit is given, create an outfit step. If Scene/context is given, create a background step.
 
 RULES:
-- Maximum {MAX_STEPS} steps
-- Each step is a single, focused edit instruction that the AI image editor can execute
-- Order: pose changes FIRST, then outfit/clothing, then scene/background LAST
-- Do NOT add lighting or illumination instructions unless the user explicitly asks for specific lighting. Let the model decide lighting naturally.
-- Each step must include "Do not change facial features, keep face identity, hair style, body proportion, legs, belly, etc if user prompt don't mention" at the end
-- Only include steps that are actually needed. If the request is just about outfit, return 1 step.
-- Keep each step prompt under 30 words
+- Minimum steps needed. Single-aspect request = 1 step.
+- Order: pose FIRST, then outfit, then background LAST.
+- No lighting changes unless user explicitly asks.
+- Each step prompt: under 30 words, end with "Do not change facial features, keep face identity".
 
-LORA SWITCH SELECTION — each step must specify which LoRA model to use:
-- switch 1: No LoRA. Use for SFW content — outfit changes, pose changes, background changes, normal scenes.
-- switch 2: PenisLora. Use ONLY when the step prompt explicitly involves showing a penis or dick. The prompt MUST mention "penis" or "dick" for this LoRA to work.
-- switch 3: multiConceptNSFW. Use for NSFW sexual content. Supports these trigger words that MUST appear in the prompt for the LoRA to activate: nsfw, cum_on_face, blowjob, cowgirlout (cowgirl position from outside view), creamp1e, penis, l1ck (woman licking penis), missionary, nipples, reversecowgirlpov (reverse cowgirl from man's POV), vagina.
-  When using switch 3, include the relevant trigger word(s) directly in the step prompt.
+LORA SWITCH per step:
+- 1 = SFW (outfit, pose, background, normal scenes)
+- 2 = PenisLora (prompt MUST contain "penis" or "dick" to activate; use for male nude/naked)
+- 3 = multiConceptNSFW (for female NSFW; prompt MUST contain trigger words: nsfw, cum_on_face, blowjob, cowgirlout, creamp1e, penis, l1ck, missionary, nipples, reversecowgirlpov, vagina)
+Female NSFW → switch 3. Male penis-only → switch 2.
 
-Use switch 3 (multiConceptNSFW) for female picture. Only use switch 2 when the ONLY NSFW element is showing a penis for male picture.
+Respond ONLY with a JSON array: [{{"prompt":"...","switch":N}}, ...]
 
-Respond with ONLY a JSON array of objects, each with "prompt" and "switch" keys. Nothing else.
+"""
 
-Example input: "wearing bikini, at the mountain, standing with arms raised"
-Example output: [{{"prompt": "Change pose to standing with arms raised. Do not change facial features, keep face identity", "switch": 1}}, {{"prompt": "Change outfit to bikini. Do not change facial features, keep face identity", "switch": 1}}, {{"prompt": "Change background to mountain scenery. Do not change facial features, keep face identity", "switch": 1}}]
-
-Example input: "wearing a red dress"
-Example output: [{{"prompt": "Change outfit to a red dress. Do not change facial features, keep face identity", "switch": 1}}]
-
-Example input: "show me your body naked"
-Example output: [{{"prompt": "Remove all clothing, show full naked body, nsfw, nipples, vagina. Do not change facial features, keep face identity", "switch": 3}}]
-
-Example input: "show me your dick hard"
-Example output: [{{"prompt": "Show erect penis, dick fully visible. Do not change facial features, keep face identity", "switch": 2}}]
-
-Example input: "riding me cowgirl"
-Example output: [{{"prompt": "nsfw cowgirlout position, riding on top, naked. Do not change facial features, keep face identity", "switch": 3}}]"""
+    ts = datetime.now(timezone.utc).isoformat()
+    _file_logger.debug(
+        f"\n{'='*72}\n"
+        f"[{ts}] AIO DECOMPOSE\n"
+        f"MODEL: {settings.XAI_MODEL}\n"
+        f"USER REQUEST: {user_request}\n"
+        f"SYSTEM PROMPT:\n{system_prompt}\n"
+        f"{'-'*72}"
+    )
 
     try:
         async with httpx.AsyncClient() as http:
@@ -235,12 +252,20 @@ Example output: [{{"prompt": "nsfw cowgirlout position, riding on top, naked. Do
 
             content = api_result["choices"][0]["message"]["content"].strip()
 
+            _file_logger.debug(f"RAW RESPONSE:\n{content}\n{'-'*72}")
+
             # Handle markdown code blocks
             if content.startswith("```"):
                 content = content.split("\n", 1)[1]
                 content = content.rsplit("```", 1)[0].strip()
 
             steps = json.loads(content)
+
+            _file_logger.debug(
+                f"PARSED ({len(steps) if isinstance(steps, list) else 'NOT A LIST'}):\n"
+                f"  {json.dumps(steps, indent=2)}"
+            )
+
             if isinstance(steps, list) and steps:
                 # Normalize: accept both old string format and new object format
                 normalized = []
@@ -252,14 +277,38 @@ Example output: [{{"prompt": "nsfw cowgirlout position, riding on top, naked. Do
                         if sw not in (1, 2, 3):
                             sw = 1
                         normalized.append({"prompt": s["prompt"], "switch": sw})
+
+                _file_logger.debug(
+                    f"NORMALIZED ({len(normalized)}):\n"
+                    f"  {json.dumps(normalized, indent=2)}\n"
+                    f"{'='*72}"
+                )
                 logger.info(f"[AIO] Grok decomposed into {len(normalized)} steps: {normalized}")
                 return normalized
 
+            _file_logger.debug(f"UNEXPECTED FORMAT — falling back\n{'='*72}")
+
+    except json.JSONDecodeError as exc:
+        _file_logger.debug(
+            f"JSON PARSE FAILED [{datetime.now(timezone.utc).isoformat()}]:\n"
+            f"  error: {exc}\n"
+            f"  raw ({len(content)} chars):\n{content}\n"
+            f"{'='*72}"
+        )
+        logger.error(f"[AIO] Decompose JSON parse failed: {exc}, falling back")
+
     except Exception as e:
+        _file_logger.debug(
+            f"DECOMPOSE ERROR [{datetime.now(timezone.utc).isoformat()}]:\n"
+            f"  {type(e).__name__}: {e}\n"
+            f"{'='*72}"
+        )
         logger.error(f"[AIO] Decompose failed: {e}, falling back to single step")
 
-    # Fallback: single combined prompt
-    return [{"prompt": f"{user_request}. Do not change facial features, keep face identity", "switch": 1}]
+    # Fallback
+    fallback = [{"prompt": f"{user_request}. Do not change facial features, keep face identity", "switch": 1}]
+    _file_logger.debug(f"FALLBACK: {fallback}\n{'='*72}")
+    return fallback
 
 
 class ImageBridge:
@@ -296,6 +345,8 @@ class ImageBridge:
         prompt: str,
         pose_description: str | None = None,
         outfit_description: str | None = None,
+        gender: str = "woman",
+        user_message: str | None = None,
     ) -> dict:
         """Queue an image generation request. Returns when it's done."""
         self._ensure_worker()
@@ -306,6 +357,8 @@ class ImageBridge:
             "prompt": prompt,
             "pose_description": pose_description,
             "outfit_description": outfit_description,
+            "gender": gender,
+            "user_message": user_message,
         }
 
         if self._queue.full():
@@ -327,6 +380,8 @@ class ImageBridge:
         prompt: str,
         pose_description: str | None = None,
         outfit_description: str | None = None,
+        gender: str = "woman",
+        user_message: str | None = None,
     ) -> dict:
         """
         Generate image using the AIO workflow with multi-step chaining.
@@ -340,9 +395,20 @@ class ImageBridge:
             return {"status": "failed", "error": "Reference image not found"}
 
         # Step 0: Ask Grok to decompose the request
-        steps = await _decompose_request(prompt, pose_description, outfit_description)
+        steps = await _decompose_request(
+            prompt, pose_description, outfit_description,
+            gender=gender, user_message=user_message,
+        )
         logger.info(f"[AIO] Pipeline: {len(steps)} steps to execute")
 
+        # Run the blocking ComfyUI pipeline in a thread so the event loop
+        # stays free for other requests (chat, health, etc.)
+        return await asyncio.to_thread(
+            self._run_comfyui_pipeline, ref_image_path, steps,
+        )
+
+    def _run_comfyui_pipeline(self, ref_image_path: str, steps: list[dict]) -> dict:
+        """Blocking ComfyUI pipeline — runs in a worker thread."""
         last_error = None
 
         for pipeline_attempt in range(1, MAX_PIPELINE_RETRIES + 1):

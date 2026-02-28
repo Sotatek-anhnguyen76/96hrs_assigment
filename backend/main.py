@@ -2,9 +2,11 @@
 Multi-Modal Chat API
 Talks directly to ComfyUI for image generation — no external API dependency.
 """
+import asyncio
 import logging
 import os
 import sys
+import uuid as _uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
@@ -34,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 chat_service = ChatService()
 image_bridge = ImageBridge()
+
+# --- In-memory job store for async image generation ---
+# job_id → {"status": "pending"|"running"|"succeeded"|"failed", ...result fields}
+_jobs: dict[str, dict] = {}
 
 
 @asynccontextmanager
@@ -68,6 +74,7 @@ class ChatMessage(BaseModel):
 class PersonaOverride(BaseModel):
     name: str | None = None
     age: int | None = None
+    gender: str | None = None
     personality: str | None = None
     occupation: str | None = None
     relationship: str | None = None
@@ -106,9 +113,10 @@ class CharacterInfo(BaseModel):
 
 class GenerateImageRequest(BaseModel):
     character_id: str = Field(..., description="Character profile ID")
-    image_context: str = Field("", description="Scene description / edit prompt")
+    image_context: str | None = Field(None, description="Scene description / edit prompt")
     pose_description: str | None = Field(None, description="Body pose for xAI image gen")
     outfit_description: str | None = Field(None, description="Outfit change instruction for SAM3 workflow")
+    user_message: str | None = Field(None, description="Original user chat message for context")
 
 
 def _make_public_url(relative_url: str | None, http_request: Request) -> str | None:
@@ -159,7 +167,7 @@ def _build_system_prompt(character: dict, override: PersonaOverride | None = Non
     base_name = character["chat_name"]
 
     if override:
-        for field in ["name", "age", "personality", "occupation", "relationship",
+        for field in ["name", "age", "gender", "personality", "occupation", "relationship",
                        "ethnicity", "bodyType", "hairStyle", "hairColor", "eyeColor", "style"]:
             val = getattr(override, field, None)
             if val is not None:
@@ -167,6 +175,7 @@ def _build_system_prompt(character: dict, override: PersonaOverride | None = Non
 
     name = persona.get("name", base_name)
     age = persona.get("age", 25)
+    gender = persona.get("gender", "woman")
     occupation = persona.get("occupation", "")
     personality = persona.get("personality", "friendly")
     relationship = persona.get("relationship", "stranger")
@@ -177,11 +186,11 @@ def _build_system_prompt(character: dict, override: PersonaOverride | None = Non
     eye_color = persona.get("eyeColor", "")
 
     return (
-        f"You are {name}, a {age}-year-old {occupation}. "
+        f"You are {name}, a {age}-year-old {gender} {occupation}. "
         f"Your personality is {personality}. "
         f"Your relationship with the user is: {relationship}. "
         f"You speak naturally and casually, like texting someone you know. "
-        f"You are a {ethnicity} person with {hair_style} {hair_color} hair, "
+        f"You are a {ethnicity} {gender} with {hair_style} {hair_color} hair, "
         f"{eye_color} eyes, and a {body_type} build."
     )
 
@@ -232,8 +241,10 @@ async def get_avatar(character_id: str):
 
 
 @app.post("/characters/upload-image")
-async def upload_character_image(file: UploadFile = File(...)):
-    """Upload a custom reference image. Saves it as the 'custom' character's ref image."""
+async def upload_character_image(file: UploadFile = File(...), character_id: str = "custom_woman"):
+    """Upload a custom reference image for a character (default: custom_woman)."""
+    if character_id not in ("custom_woman", "custom_man"):
+        raise HTTPException(status_code=400, detail="character_id must be 'custom_woman' or 'custom_man'")
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
@@ -243,18 +254,18 @@ async def upload_character_image(file: UploadFile = File(...)):
 
     # Save with original extension
     ext = os.path.splitext(file.filename or "image.jpg")[1] or ".jpg"
-    save_path = os.path.join(uploads_dir, f"custom{ext}")
+    save_path = os.path.join(uploads_dir, f"{character_id}{ext}")
     content = await file.read()
     with open(save_path, "wb") as f:
         f.write(content)
 
-    # Update the custom character's ref_image path at runtime
-    custom_char = CHARACTERS.get("custom")
+    # Update the character's ref_image path at runtime
+    custom_char = CHARACTERS.get(character_id)
     if custom_char:
         custom_char["ref_image"] = save_path
 
-    logger.info(f"Custom image uploaded: {save_path} ({len(content)} bytes)")
-    return {"status": "ok", "path": save_path, "size": len(content)}
+    logger.info(f"Custom image uploaded for '{character_id}': {save_path} ({len(content)} bytes)")
+    return {"status": "ok", "character_id": character_id, "path": save_path, "size": len(content)}
 
 
 @app.get("/characters/{character_id}/persona")
@@ -304,7 +315,7 @@ async def chat(request: ChatRequest, http_request: Request):
 
     # If the character wants to send an image, generate it using the ref image
     has_ref = os.path.exists(character.get("ref_image", ""))
-    wants_image = chat_result["send_image"] and (chat_result.get("image_context") or chat_result.get("pose_description") or chat_result.get("outfit_description"))
+    wants_image = chat_result["send_image"]
 
     if wants_image and not has_ref:
         logger.warning(f"Skipping image gen for '{request.character_id}': no reference image uploaded")
@@ -320,6 +331,8 @@ async def chat(request: ChatRequest, http_request: Request):
                 prompt=chat_result.get("image_context", ""),
                 pose_description=chat_result.get("pose_description"),
                 outfit_description=chat_result.get("outfit_description"),
+                gender=character.get("persona", {}).get("gender", "woman"),
+                user_message=request.message,
             )
 
             duration = time.monotonic() - t0
@@ -387,14 +400,16 @@ async def chat_text_only(request: ChatRequest):
         "message": chat_result["message"],
         "send_image": chat_result["send_image"],
         "image_context": chat_result.get("image_context"),
+        "pose_description": chat_result.get("pose_description"),
+        "outfit_description": chat_result.get("outfit_description"),
     }
 
 
 @app.post("/chat/generate-image")
 async def generate_image_for_chat(request: GenerateImageRequest, http_request: Request):
     """
-    Generate an image for a character given a scene context.
-    Called separately from chat for async image generation.
+    Start async image generation. Returns a job_id immediately.
+    Poll /chat/job/{job_id} for the result.
     """
     character = get_character(request.character_id)
     if not character:
@@ -403,48 +418,101 @@ async def generate_image_for_chat(request: GenerateImageRequest, http_request: R
     if not os.path.exists(character.get("ref_image", "")):
         raise HTTPException(status_code=400, detail="No reference image uploaded for this character. Please upload one first.")
 
+    job_id = _uuid.uuid4().hex[:12]
+    _jobs[job_id] = {"status": "pending"}
+
+    # Capture origin/host now so the background task can build public URLs
+    origin = http_request.headers.get("origin", "")
+    scheme = http_request.url.scheme
+    host = http_request.headers.get("host", "localhost:8000")
+
+    def make_url(rel: str | None) -> str | None:
+        if not rel:
+            return None
+        if origin:
+            return f"{origin}{rel}"
+        return f"{scheme}://{host}{rel}"
+
+    asyncio.create_task(_run_image_job(
+        job_id, character, request, make_url,
+    ))
+
+    return {"job_id": job_id, "status": "pending"}
+
+
+async def _run_image_job(
+    job_id: str,
+    character: dict,
+    request: GenerateImageRequest,
+    make_url,
+):
+    """Background task that runs image generation and stores the result."""
     import time
-    t0 = time.monotonic()
+    _jobs[job_id]["status"] = "running"
 
-    image_result = await image_bridge.generate_image(
-        ref_image_path=character["ref_image"],
-        prompt=request.image_context,
-        pose_description=request.pose_description,
-        outfit_description=request.outfit_description,
-    )
+    try:
+        t0 = time.monotonic()
 
-    duration = time.monotonic() - t0
-
-    # Send to Google Chat with public URLs
-    if image_result.get("status") == "succeeded" and image_result.get("image_url"):
-        public_url = _make_public_url(image_result["image_url"], http_request)
-        public_original_url = _make_public_url(image_result.get("original_image_url"), http_request)
-        public_steps = _make_steps_public(image_result.get("steps"), http_request)
-
-        # Detect workflow type from the request params
-        wf_type = "AIO" if settings.USE_AIO_MODE else ("Pose Workflow" if request.pose_description else "Outfit Workflow")
-        if settings.USE_AIO_MODE:
-            parts = []
-            if request.pose_description:
-                parts.append("pose")
-            if request.outfit_description:
-                parts.append("outfit")
-            if request.image_context and not parts:
-                parts.append("scene")
-            wf_type = f"AIO ({' + '.join(parts)})" if parts else "AIO"
-
-        send_generation_result(
-            character_name=character["chat_name"],
-            user_message=request.image_context,
-            ai_message=f"[Image generated: {request.image_context}]",
-            image_url=public_url,
-            original_image_url=public_original_url,
-            steps=public_steps,
-            duration=duration,
-            workflow_type=wf_type,
+        image_result = await image_bridge.generate_image(
+            ref_image_path=character["ref_image"],
+            prompt=request.image_context or "",
+            pose_description=request.pose_description,
+            outfit_description=request.outfit_description,
+            gender=character.get("persona", {}).get("gender", "woman"),
+            user_message=request.user_message,
         )
 
-    return image_result
+        duration = time.monotonic() - t0
+
+        # Send to Google Chat with public URLs
+        if image_result.get("status") == "succeeded" and image_result.get("image_url"):
+            public_url = make_url(image_result["image_url"])
+            public_original_url = make_url(image_result.get("original_image_url"))
+            public_steps = None
+            if image_result.get("steps"):
+                public_steps = []
+                for step in image_result["steps"]:
+                    s = dict(step)
+                    if s.get("image_url"):
+                        s["image_url"] = make_url(s["image_url"])
+                    public_steps.append(s)
+
+            wf_type = "AIO" if settings.USE_AIO_MODE else ("Pose Workflow" if request.pose_description else "Outfit Workflow")
+            if settings.USE_AIO_MODE:
+                parts = []
+                if request.pose_description:
+                    parts.append("pose")
+                if request.outfit_description:
+                    parts.append("outfit")
+                if request.image_context and not parts:
+                    parts.append("scene")
+                wf_type = f"AIO ({' + '.join(parts)})" if parts else "AIO"
+
+            send_generation_result(
+                character_name=character["chat_name"],
+                user_message=request.image_context,
+                ai_message=f"[Image generated: {request.image_context}]",
+                image_url=public_url,
+                original_image_url=public_original_url,
+                steps=public_steps,
+                duration=duration,
+                workflow_type=wf_type,
+            )
+
+        _jobs[job_id] = image_result
+
+    except Exception as e:
+        logger.error(f"[JOB {job_id}] Image generation failed: {e}")
+        _jobs[job_id] = {"status": "failed", "error": str(e)}
+
+
+@app.get("/chat/job/{job_id}")
+async def get_job_status(job_id: str):
+    """Poll for image generation result. Returns status + result when done."""
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 if __name__ == "__main__":

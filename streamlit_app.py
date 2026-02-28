@@ -4,6 +4,7 @@ Streamlit frontend that connects to the FastAPI backend on Vast.ai.
 
 Uses split flow: /chat/stream for fast text, /chat/generate-image for async image gen.
 """
+import time
 import streamlit as st
 import requests
 
@@ -65,30 +66,64 @@ def send_text_only(character_id: str, message: str, history: list, persona_overr
     return r.json()
 
 
-def generate_image(character_id: str, image_context: str, pose_description=None, outfit_description=None) -> dict:
-    """Trigger image generation separately."""
-    r = requests.post(
-        f"{API_URL}/chat/generate-image",
-        json={
-            "character_id": character_id,
-            "image_context": image_context,
-            "pose_description": pose_description,
-            "outfit_description": outfit_description,
-        },
-        timeout=300,
-    )
-    if r.status_code >= 400:
-        detail = r.json().get("detail", r.text) if r.headers.get("content-type", "").startswith("application/json") else r.text
-        return {"status": "failed", "error": detail}
-    return r.json()
+def generate_image(character_id: str, image_context: str, pose_description=None, outfit_description=None, user_message=None) -> dict:
+    """Start image generation and poll for result.
+
+    Uses job-based async: POST returns a job_id instantly, then we poll
+    GET /chat/job/{job_id} every few seconds. Each HTTP request is short
+    so Cloudflare tunnel never times out.
+    """
+    # Step 1: Submit the job (fast — returns immediately)
+    try:
+        r = requests.post(
+            f"{API_URL}/chat/generate-image",
+            json={
+                "character_id": character_id,
+                "image_context": image_context,
+                "pose_description": pose_description,
+                "outfit_description": outfit_description,
+                "user_message": user_message,
+            },
+            timeout=30,
+        )
+        if r.status_code >= 400:
+            detail = r.json().get("detail", r.text) if r.headers.get("content-type", "").startswith("application/json") else r.text
+            return {"status": "failed", "error": detail}
+        data = r.json()
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+    job_id = data.get("job_id")
+    if not job_id:
+        # Backend returned result directly (shouldn't happen, but handle gracefully)
+        return data
+
+    # Step 2: Poll for completion (short requests, tunnel-safe)
+    max_polls = 120  # 120 * 3s = 360s max wait
+    for _ in range(max_polls):
+        time.sleep(3)
+        try:
+            r = requests.get(f"{API_URL}/chat/job/{job_id}", timeout=15)
+            r.raise_for_status()
+            result = r.json()
+            status = result.get("status", "")
+            if status in ("succeeded", "failed"):
+                return result
+            # still pending/running — keep polling
+        except Exception:
+            # Transient tunnel error — keep trying
+            continue
+
+    return {"status": "failed", "error": "Image generation timed out (polling exceeded 360s)"}
 
 
-def upload_custom_image(file_bytes, filename):
+def upload_custom_image(file_bytes, filename, character_id="custom_woman"):
     """Upload a custom reference image to the backend."""
     try:
         r = requests.post(
             f"{API_URL}/characters/upload-image",
             files={"file": (filename, file_bytes, "image/jpeg")},
+            params={"character_id": character_id},
             timeout=30,
         )
         r.raise_for_status()
@@ -121,6 +156,14 @@ with st.sidebar:
     st.divider()
 
     characters = fetch_characters()
+
+    # Keep selected character in sync with fresh data from backend
+    selected = st.session_state.selected_character
+    if selected:
+        for c in characters:
+            if c["id"] == selected["id"]:
+                st.session_state.selected_character.update(c)
+                break
 
     for char in characters:
         selected = st.session_state.selected_character
@@ -178,33 +221,40 @@ elif not st.session_state.chat_started:
 
     col_avatar, col_title = st.columns([1, 4])
     with col_avatar:
-        # Show uploaded image for custom, otherwise show avatar
-        if char["id"] == "custom" and st.session_state.get("custom_image_preview"):
-            st.image(st.session_state.custom_image_preview, width=120)
+        # Show avatar: prefer local preview bytes, then avatar_url from backend
+        preview_key = f"custom_image_preview_{char['id']}"
+        if st.session_state.get(preview_key):
+            st.image(st.session_state[preview_key], width=120)
         elif char.get("avatar_url"):
             st.image(full_image_url(char["avatar_url"]), width=120)
+        elif char.get("has_ref_image"):
+            st.image(full_image_url(f"/avatar/{char['id']}"), width=120)
     with col_title:
         st.title(f"Configure {char['name']}")
         st.caption("Edit the persona before starting the chat")
 
     # Custom character: image upload
-    if char["id"] == "custom":
+    if char["id"].startswith("custom_"):
         st.divider()
         st.markdown("**Upload Reference Image**")
         uploaded_file = st.file_uploader(
             "Choose a reference photo for your character",
             type=["jpg", "jpeg", "png", "webp"],
-            key="custom_upload",
+            key=f"custom_upload_{char['id']}",
         )
         if uploaded_file is not None:
             file_bytes = uploaded_file.getvalue()
             st.image(file_bytes, caption="Preview", width=200)
             if st.button("Upload Image", type="primary"):
-                result = upload_custom_image(file_bytes, uploaded_file.name)
+                result = upload_custom_image(file_bytes, uploaded_file.name, character_id=char["id"])
                 if result and result.get("status") == "ok":
                     st.success("Image uploaded successfully!")
-                    st.session_state.custom_image_preview = file_bytes
-                    # Clear character cache so avatar refreshes
+                    st.session_state[f"custom_image_preview_{char['id']}"] = file_bytes
+                    # Update selected character so it reflects the upload
+                    char["has_ref_image"] = True
+                    char["avatar_url"] = f"/avatar/{char['id']}"
+                    st.session_state.selected_character = char
+                    # Clear character cache so sidebar refreshes
                     fetch_characters.clear()
                     st.rerun()
 
@@ -300,11 +350,14 @@ else:
                     ])
 
                     # Step 2: If image requested, generate it
-                    if text_resp.get("send_image") and text_resp.get("image_context"):
+                    if text_resp.get("send_image"):
                         with st.spinner("Generating image..."):
                             img_resp = generate_image(
                                 char["id"],
                                 text_resp.get("image_context", ""),
+                                pose_description=text_resp.get("pose_description"),
+                                outfit_description=text_resp.get("outfit_description"),
+                                user_message=prompt,
                             )
 
                             if img_resp.get("status") == "succeeded" and img_resp.get("image_url"):

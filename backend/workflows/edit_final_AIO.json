@@ -131,7 +131,7 @@
   "20": {
     "inputs": {
       "lora_name": "PenisLora.safetensors",
-      "strength_model": 0.7,
+      "strength_model": 0.8,
       "model": [
         "1",
         0
