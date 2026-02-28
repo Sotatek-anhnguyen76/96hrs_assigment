@@ -114,12 +114,20 @@ def send_generation_result(
                     }
                 },
             ]
-            # Include step image if available
+            # Include step image + open button if available
             step_img = step.get("image_url")
             if step_img:
                 step_widgets.append(
                     {"image": {"imageUrl": step_img, "altText": f"Step {i + 1} result"}},
                 )
+                step_widgets.append({
+                    "buttonList": {
+                        "buttons": [{
+                            "text": f"Open Step {i + 1}",
+                            "onClick": {"openLink": {"url": step_img}},
+                        }]
+                    }
+                })
             sections.append({
                 "header": f"Step {i + 1} / {len(steps)}",
                 "widgets": step_widgets,

@@ -70,14 +70,50 @@ def _read_image(path: str) -> tuple[bytes, str, int, int]:
     return data, content_type, w, h
 
 
-def _save_output(image_bytes: bytes) -> str:
-    """Save image bytes to local storage, return /images/ URL path."""
+def _upload_to_supabase(image_bytes: bytes, filename: str) -> str | None:
+    """Upload image to Supabase Storage, return public URL or None on failure."""
+    if not settings.USE_SUPABASE_STORAGE or not settings.SUPABASE_SERVICE_ROLE_KEY:
+        return None
+    try:
+        url = (
+            f"{settings.SUPABASE_URL}/storage/v1/object/"
+            f"{settings.SUPABASE_BUCKET_NAME}/generated/{filename}"
+        )
+        resp = httpx.put(
+            url,
+            content=image_bytes,
+            headers={
+                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}",
+                "Content-Type": "image/png",
+                "x-upsert": "true",
+            },
+            timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            public_url = (
+                f"{settings.SUPABASE_URL}/storage/v1/object/public/"
+                f"{settings.SUPABASE_BUCKET_NAME}/generated/{filename}"
+            )
+            logger.info(f"[Supabase] Uploaded {filename}")
+            return public_url
+        else:
+            logger.warning(f"[Supabase] Upload failed {resp.status_code}: {resp.text[:200]}")
+            return None
+    except Exception as e:
+        logger.error(f"[Supabase] Upload error: {e}")
+        return None
+
+
+def _save_output(image_bytes: bytes) -> dict:
+    """Save image bytes to local storage + Supabase. Returns {"local": "/images/...", "supabase": "https://..." | None}."""
     img_hash = hashlib.md5(image_bytes[:2048]).hexdigest()[:12]
     filename = f"{img_hash}.png"
     path = os.path.join(STORAGE_DIR, filename)
     with open(path, "wb") as f:
         f.write(image_bytes)
-    return f"/images/{filename}"
+    local_url = f"/images/{filename}"
+    supabase_url = _upload_to_supabase(image_bytes, filename)
+    return {"local": local_url, "supabase": supabase_url}
 
 
 def _prepare_aio_workflow(
@@ -201,7 +237,7 @@ RULES:
 
 LORA SWITCH per step:
 - 1 = SFW (outfit, pose, background, normal scenes)
-- 2 = PenisLora (prompt MUST contain "penis" or "dick" to activate; use for male nude/naked)
+- 2 = PenisLora (prompt MUST contain "dick/cock/penis" and triggerword PENISLORA to activate; use for male nude/naked)
 - 3 = multiConceptNSFW (for female NSFW; prompt MUST contain trigger words: nsfw, cum_on_face, blowjob, cowgirlout, creamp1e, penis, l1ck, missionary, nipples, reversecowgirlpov, vagina)
 Female NSFW → switch 3. Male penis-only → switch 2.
 
@@ -505,7 +541,7 @@ class ImageBridge:
                         )
 
                     # Save this step's output image so it can be shown in Google Chat
-                    step_image_url = _save_output(best_image)
+                    step_saved = _save_output(best_image)
 
                     step_duration = round(time.monotonic() - step_t0, 1)
                     logger.info(f"[AIO] Step {step_idx + 1} completed in {step_duration}s")
@@ -514,7 +550,8 @@ class ImageBridge:
                         "prompt": step_prompt[:80],
                         "face_score": best_score,
                         "attempts": attempt + 1,
-                        "image_url": step_image_url,
+                        "image_url": step_saved["local"],
+                        "supabase_url": step_saved["supabase"],
                         "lora_switch": step_switch,
                         "lora_name": lora_name,
                         "duration": step_duration,
@@ -531,16 +568,18 @@ class ImageBridge:
                         logger.info(f"[AIO] Chained step {step_idx + 1} output → step {step_idx + 2} input")
 
                 # Save original ref image so Google Chat can show it
-                original_image_url = _save_output(ref_data)
+                original_saved = _save_output(ref_data)
 
                 # Save final result
-                url = _save_output(final_image_bytes)
-                logger.info(f"[AIO] Pipeline complete: {len(steps)} steps, final image: {url}")
+                final_saved = _save_output(final_image_bytes)
+                logger.info(f"[AIO] Pipeline complete: {len(steps)} steps, final image: {final_saved['local']}")
                 return {
                     "status": "succeeded",
-                    "image_url": url,
+                    "image_url": final_saved["local"],
+                    "supabase_url": final_saved["supabase"],
                     "steps": step_results,
-                    "original_image_url": original_image_url,
+                    "original_image_url": original_saved["local"],
+                    "original_supabase_url": original_saved["supabase"],
                 }
 
             except Exception as e:

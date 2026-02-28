@@ -15,7 +15,7 @@
       "cfg": 1,
       "sampler_name": "euler_ancestral",
       "scheduler": "beta",
-      "denoise": 0.9,
+      "denoise": 0.95,
       "model": [
         "22",
         0
@@ -131,7 +131,7 @@
   "20": {
     "inputs": {
       "lora_name": "PenisLora.safetensors",
-      "strength_model": 0.8,
+      "strength_model": 0.85,
       "model": [
         "1",
         0

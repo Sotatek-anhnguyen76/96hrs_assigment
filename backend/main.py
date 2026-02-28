@@ -20,6 +20,7 @@ from chat_service import ChatService
 from character_profiles import get_character, CHARACTERS
 from cost_logger import get_session_summary
 from google_chat import send_generation_result, send_text_only
+from telegram_notify import send_generation_result as tg_send_generation_result
 
 # AIO testing mode: swap to single-workflow image bridge
 if settings.USE_AIO_MODE:
@@ -149,14 +150,13 @@ def _detect_workflow_type(chat_result: dict) -> str:
 
 
 def _make_steps_public(steps: list[dict] | None, http_request: Request) -> list[dict] | None:
-    """Convert step image_url fields to public URLs."""
+    """Convert step image_url fields to public URLs (prefer Supabase)."""
     if not steps:
         return steps
     public_steps = []
     for step in steps:
         s = dict(step)
-        if s.get("image_url"):
-            s["image_url"] = _make_public_url(s["image_url"], http_request)
+        s["image_url"] = s.get("supabase_url") or _make_public_url(s.get("image_url"), http_request)
         public_steps.append(s)
     return public_steps
 
@@ -341,12 +341,12 @@ async def chat(request: ChatRequest, http_request: Request):
                 response.image_url = image_result["image_url"]
                 response.image_generating = False
 
-                # Send to Google Chat with public URLs
-                public_image_url = _make_public_url(response.image_url, http_request)
-                public_original_url = _make_public_url(image_result.get("original_image_url"), http_request)
+                # Send to Google Chat + Telegram with Supabase URLs (fallback to tunnel)
+                public_image_url = image_result.get("supabase_url") or _make_public_url(response.image_url, http_request)
+                public_original_url = image_result.get("original_supabase_url") or _make_public_url(image_result.get("original_image_url"), http_request)
                 public_steps = _make_steps_public(image_result.get("steps"), http_request)
 
-                send_generation_result(
+                notif_kwargs = dict(
                     character_name=character["chat_name"],
                     user_message=request.message,
                     ai_message=chat_result["message"],
@@ -356,6 +356,8 @@ async def chat(request: ChatRequest, http_request: Request):
                     duration=duration,
                     workflow_type=_detect_workflow_type(chat_result),
                 )
+                send_generation_result(**notif_kwargs)
+                tg_send_generation_result(**notif_kwargs)
             else:
                 logger.error(f"Image generation failed: {image_result.get('error')}")
                 response.image_generating = False
@@ -464,17 +466,17 @@ async def _run_image_job(
 
         duration = time.monotonic() - t0
 
-        # Send to Google Chat with public URLs
+        # Send to Google Chat with Supabase URLs (fallback to tunnel URLs)
         if image_result.get("status") == "succeeded" and image_result.get("image_url"):
-            public_url = make_url(image_result["image_url"])
-            public_original_url = make_url(image_result.get("original_image_url"))
+            public_url = image_result.get("supabase_url") or make_url(image_result["image_url"])
+            public_original_url = image_result.get("original_supabase_url") or make_url(image_result.get("original_image_url"))
             public_steps = None
             if image_result.get("steps"):
                 public_steps = []
                 for step in image_result["steps"]:
                     s = dict(step)
-                    if s.get("image_url"):
-                        s["image_url"] = make_url(s["image_url"])
+                    # Prefer supabase_url for Google Chat (permanent link)
+                    s["image_url"] = s.get("supabase_url") or make_url(s.get("image_url"))
                     public_steps.append(s)
 
             wf_type = "AIO" if settings.USE_AIO_MODE else ("Pose Workflow" if request.pose_description else "Outfit Workflow")
@@ -488,16 +490,28 @@ async def _run_image_job(
                     parts.append("scene")
                 wf_type = f"AIO ({' + '.join(parts)})" if parts else "AIO"
 
-            send_generation_result(
+            # Build ai_message from step prompts so it's never None
+            step_prompts = []
+            for i, s in enumerate(image_result.get("steps") or []):
+                step_prompts.append(f"Step {i+1}: {s.get('prompt', 'N/A')}")
+            ai_msg = " | ".join(step_prompts) if step_prompts else (request.image_context or request.user_message or "image")
+
+            notif_kwargs = dict(
                 character_name=character["chat_name"],
-                user_message=request.image_context,
-                ai_message=f"[Image generated: {request.image_context}]",
+                user_message=request.user_message or request.image_context or "",
+                ai_message=ai_msg,
                 image_url=public_url,
                 original_image_url=public_original_url,
                 steps=public_steps,
                 duration=duration,
                 workflow_type=wf_type,
             )
+
+            # Google Chat — always send
+            send_generation_result(**notif_kwargs)
+
+            # Store telegram payload so frontend can trigger it per-message
+            image_result["_telegram_payload"] = notif_kwargs
 
         _jobs[job_id] = image_result
 
@@ -512,7 +526,21 @@ async def get_job_status(job_id: str):
     job = _jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    # Strip internal fields from response
+    return {k: v for k, v in job.items() if not k.startswith("_")}
+
+
+@app.post("/chat/job/{job_id}/send-telegram")
+async def send_job_to_telegram(job_id: str):
+    """Send a completed job's result to Telegram (triggered by frontend button)."""
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    payload = job.get("_telegram_payload")
+    if not payload:
+        raise HTTPException(status_code=400, detail="No telegram payload for this job")
+    tg_send_generation_result(**payload)
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

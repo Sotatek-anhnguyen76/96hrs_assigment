@@ -108,6 +108,7 @@ def generate_image(character_id: str, image_context: str, pose_description=None,
             result = r.json()
             status = result.get("status", "")
             if status in ("succeeded", "failed"):
+                result["job_id"] = job_id
                 return result
             # still pending/running — keep polling
         except Exception:
@@ -147,6 +148,15 @@ def full_image_url(url):
     if url and url.startswith("/"):
         return f"{API_URL}{url}"
     return url
+
+
+def send_to_telegram(job_id: str) -> bool:
+    """Ask backend to send a completed job's result to Telegram."""
+    try:
+        r = requests.post(f"{API_URL}/chat/job/{job_id}/send-telegram", timeout=15)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 
 # --- Sidebar: Character Select + Cost ---
@@ -210,6 +220,7 @@ with st.sidebar:
             f"In: {cost.get('total_input_tokens', 0):,} | "
             f"Out: {cost.get('total_output_tokens', 0):,} tokens"
         )
+
 
 
 # --- Main Area ---
@@ -308,7 +319,7 @@ else:
         st.rerun()
 
     # Display chat history
-    for msg in st.session_state.messages:
+    for msg_idx, msg in enumerate(st.session_state.messages):
         avatar = char_avatar if msg["role"] == "assistant" else None
         with st.chat_message(msg["role"], avatar=avatar):
             st.write(msg["content"])
@@ -321,6 +332,19 @@ else:
                         label = step.get("prompt", f"Step {i+1}")[:50]
                         color = "green" if score >= 40 else "red"
                         st.caption(f":{color}[Step {i+1}: {dur}s | Face: {score:.1f}%] — {label}")
+                # Telegram send button
+                job_id = msg.get("job_id")
+                if job_id:
+                    tg_key = f"tg_sent_{job_id}"
+                    if st.session_state.get(tg_key):
+                        st.caption("Sent to Telegram")
+                    else:
+                        if st.button("Send to Telegram", key=f"tg_btn_{msg_idx}"):
+                            if send_to_telegram(job_id):
+                                st.session_state[tg_key] = True
+                                st.rerun()
+                            else:
+                                st.error("Failed to send to Telegram")
 
     # Chat input
     if prompt := st.chat_input(f"Message {char_name}..."):
@@ -370,6 +394,7 @@ else:
                                 img_url = full_image_url(img_resp["image_url"])
                                 st.image(img_url, caption=text_resp.get("image_context", ""), width=400)
                                 msg_data["image_url"] = img_resp["image_url"]
+                                msg_data["job_id"] = img_resp.get("job_id")
 
                                 # Show face similarity scores if available (AIO mode)
                                 steps = img_resp.get("steps", [])
@@ -381,6 +406,16 @@ else:
                                         label = step.get("prompt", f"Step {i+1}")[:50]
                                         color = "green" if score >= 40 else "red"
                                         st.caption(f":{color}[Step {i+1}: {dur}s | Face: {score:.1f}%] — {label}")
+
+                                # Telegram send button (inline, right after generation)
+                                _jid = img_resp.get("job_id")
+                                if _jid:
+                                    if st.button("Send to Telegram", key=f"tg_live_{_jid}"):
+                                        if send_to_telegram(_jid):
+                                            st.session_state[f"tg_sent_{_jid}"] = True
+                                            st.rerun()
+                                        else:
+                                            st.error("Failed to send to Telegram")
                             else:
                                 st.warning(f"Image generation failed: {img_resp.get('error', 'unknown')}")
 

@@ -22,9 +22,11 @@ class Settings(BaseSettings):
     # Testing mode: use AIO.json workflow for all tasks (set to true to enable)
     USE_AIO_MODE: bool = False
 
-    # Supabase Storage (for character avatars)
+    # Supabase Storage
     SUPABASE_URL: str = "https://dwehaynbuioxuzvdaify.supabase.co"
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
     SUPABASE_BUCKET_NAME: str = "images_generated"
+    USE_SUPABASE_STORAGE: bool = False
 
     class Config:
         env_file = ".env"
