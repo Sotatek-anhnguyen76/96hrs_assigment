@@ -409,6 +409,7 @@ class ImageBridge:
 
     def _run_comfyui_pipeline(self, ref_image_path: str, steps: list[dict]) -> dict:
         """Blocking ComfyUI pipeline — runs in a worker thread."""
+        import time
         last_error = None
 
         for pipeline_attempt in range(1, MAX_PIPELINE_RETRIES + 1):
@@ -435,6 +436,7 @@ class ImageBridge:
                 step_results = []  # Track results per step for reporting
 
                 for step_idx, step_info in enumerate(steps):
+                    step_t0 = time.monotonic()
                     step_prompt = step_info["prompt"]
                     step_switch = step_info.get("switch", 1)
                     lora_name = LORA_SWITCH_NAMES.get(step_switch, "unknown")
@@ -505,6 +507,9 @@ class ImageBridge:
                     # Save this step's output image so it can be shown in Google Chat
                     step_image_url = _save_output(best_image)
 
+                    step_duration = round(time.monotonic() - step_t0, 1)
+                    logger.info(f"[AIO] Step {step_idx + 1} completed in {step_duration}s")
+
                     step_results.append({
                         "prompt": step_prompt[:80],
                         "face_score": best_score,
@@ -512,6 +517,7 @@ class ImageBridge:
                         "image_url": step_image_url,
                         "lora_switch": step_switch,
                         "lora_name": lora_name,
+                        "duration": step_duration,
                     })
 
                     final_image_bytes = best_image

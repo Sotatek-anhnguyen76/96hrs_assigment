@@ -312,9 +312,10 @@ else:
                 if msg.get("face_scores"):
                     for i, step in enumerate(msg["face_scores"]):
                         score = step.get("face_score", 0)
+                        dur = step.get("duration", 0)
                         label = step.get("prompt", f"Step {i+1}")[:50]
                         color = "green" if score >= 40 else "red"
-                        st.caption(f":{color}[Face similarity: {score:.1f}%] — {label}")
+                        st.caption(f":{color}[Step {i+1}: {dur}s | Face: {score:.1f}%] — {label}")
 
     # Chat input
     if prompt := st.chat_input(f"Message {char_name}..."):
@@ -371,9 +372,10 @@ else:
                                     msg_data["face_scores"] = steps
                                     for i, step in enumerate(steps):
                                         score = step.get("face_score", 0)
+                                        dur = step.get("duration", 0)
                                         label = step.get("prompt", f"Step {i+1}")[:50]
                                         color = "green" if score >= 40 else "red"
-                                        st.caption(f":{color}[Face similarity: {score:.1f}%] — {label}")
+                                        st.caption(f":{color}[Step {i+1}: {dur}s | Face: {score:.1f}%] — {label}")
                             else:
                                 st.warning(f"Image generation failed: {img_resp.get('error', 'unknown')}")
 
