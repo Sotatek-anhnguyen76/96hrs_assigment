@@ -7,12 +7,25 @@
 SESSION="nectar"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR/backend"
-CONDA_BIN="/opt/miniforge3/bin/conda"
+COMFYUI_DIR="$SCRIPT_DIR/ComfyUI"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
+
+# --- Find conda ---
+if [ -f "/opt/miniforge3/bin/activate" ]; then
+    CONDA_ACTIVATE="source /opt/miniforge3/bin/activate"
+elif [ -f "$HOME/miniforge3/bin/activate" ]; then
+    CONDA_ACTIVATE="source $HOME/miniforge3/bin/activate"
+elif [ -f "$HOME/miniconda3/bin/activate" ]; then
+    CONDA_ACTIVATE="source $HOME/miniconda3/bin/activate"
+elif command -v conda &>/dev/null; then
+    CONDA_ACTIVATE="conda activate"
+else
+    CONDA_ACTIVATE=""
+fi
 
 # --- Parse flags ---
 SKIP_COMFY=false
@@ -41,11 +54,11 @@ tmux kill-session -t "$SESSION" 2>/dev/null
 # --- Start ComfyUI if needed ---
 if [ "$SKIP_COMFY" = false ]; then
     echo -e "${YELLOW}[1/4] Starting ComfyUI...${NC}"
-    # Check if edgaras start.sh exists and ComfyUI is not already running
+    # Check if ComfyUI is not already running
     if ! curl -s http://127.0.0.1:8188/system_stats > /dev/null 2>&1; then
-        if [ -f /workspace/edgaras_IMAGE/start.sh ]; then
-            echo -e "${CYAN}  Running edgaras_IMAGE/start.sh in background...${NC}"
-            bash /workspace/edgaras_IMAGE/start.sh &
+        if [ -d "$COMFYUI_DIR" ] && [ -f "$COMFYUI_DIR/main.py" ]; then
+            echo -e "${CYAN}  Launching ComfyUI from $COMFYUI_DIR...${NC}"
+            (cd "$COMFYUI_DIR" && $CONDA_ACTIVATE comfy 2>/dev/null; python main.py --listen 0.0.0.0 --port 8188 > "$SCRIPT_DIR/comfyui.log" 2>&1) &
             disown
             # Wait for ComfyUI to be ready
             echo -ne "${CYAN}  Waiting for ComfyUI (port 8188)...${NC}"
@@ -58,7 +71,7 @@ if [ "$SKIP_COMFY" = false ]; then
                 sleep 2
             done
         else
-            echo -e "${YELLOW}  edgaras_IMAGE/start.sh not found, skipping ComfyUI${NC}"
+            echo -e "${YELLOW}  ComfyUI not found at $COMFYUI_DIR, skipping${NC}"
         fi
     else
         echo -e "${GREEN}  ComfyUI already running on port 8188${NC}"
@@ -74,7 +87,7 @@ tmux new-session -d -s "$SESSION" -n "services"
 
 # Pane 0: Backend
 tmux send-keys -t "$SESSION:services.0" \
-    "cd $BACKEND_DIR && source /opt/miniforge3/bin/activate comfy && python main.py 2>&1 | tee $BACKEND_DIR/backend.log" Enter
+    "cd $BACKEND_DIR && $CONDA_ACTIVATE comfy && python main.py 2>&1 | tee $BACKEND_DIR/backend.log" Enter
 
 # --- Pane 1: Cloudflare Tunnel ---
 echo -e "${YELLOW}[3/4] Starting Cloudflare Tunnel...${NC}"

@@ -109,12 +109,11 @@ Image generation uses a job-based polling pattern to avoid Cloudflare tunnel tim
 │   ├── Marco.jpg
 │   ├── ...
 │   └── uploads/                # User-uploaded custom character images
-└── ComfyUI/                    # ComfyUI server (models/ excluded via .gitignore)
+└── ComfyUI/                    # ComfyUI server (no models/ — use setup.sh to download)
     ├── main.py                 # ComfyUI entry point
     ├── nodes.py                # Built-in node definitions
     ├── comfy/                  # Core ComfyUI library
-    ├── custom_nodes/           # 47 custom node packages
-    └── models/                 # (gitignored — download separately)
+    └── custom_nodes/           # 47 custom node packages
 ```
 
 ## Characters

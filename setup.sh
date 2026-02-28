@@ -16,9 +16,21 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMFYUI_DIR="/workspace/frontend_demo/ComfyUI"
+COMFYUI_DIR="$SCRIPT_DIR/ComfyUI"
 MODELS_DIR="$COMFYUI_DIR/models"
-CONDA_ACTIVATE="source /opt/miniforge3/bin/activate"
+
+# --- Find conda ---
+if [ -f "/opt/miniforge3/bin/activate" ]; then
+    CONDA_ACTIVATE="source /opt/miniforge3/bin/activate"
+elif [ -f "$HOME/miniforge3/bin/activate" ]; then
+    CONDA_ACTIVATE="source $HOME/miniforge3/bin/activate"
+elif [ -f "$HOME/miniconda3/bin/activate" ]; then
+    CONDA_ACTIVATE="source $HOME/miniconda3/bin/activate"
+elif command -v conda &>/dev/null; then
+    CONDA_ACTIVATE="conda activate"
+else
+    CONDA_ACTIVATE=""
+fi
 
 # --- Parse flags ---
 DO_DEPS=true
@@ -104,28 +116,29 @@ if [ "$DO_DEPS" = true ]; then
     echo -e "${YELLOW}[Step 1] Installing Python dependencies...${NC}"
     echo ""
 
-    # --- 1a. ComfyUI + custom nodes (comfy conda env) ---
-    echo -e "${CYAN}  [1a] ComfyUI core + custom nodes (comfy env)...${NC}"
-    if [ -f /workspace/edgaras_IMAGE/requirements.txt ]; then
-        $CONDA_ACTIVATE comfy && pip install -r /workspace/edgaras_IMAGE/requirements.txt 2>&1 | tail -5
+    # --- 1a. Backend + ComfyUI deps (comfy conda env) ---
+    echo -e "${CYAN}  [1a] Backend + ComfyUI dependencies (comfy env)...${NC}"
+    if [ -n "$CONDA_ACTIVATE" ]; then
+        $CONDA_ACTIVATE comfy 2>/dev/null
+    fi
+    if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
+        pip install -r "$SCRIPT_DIR/requirements.txt" 2>&1 | tail -5
         if [ $? -ne 0 ]; then
-            echo -e "${YELLOW}  Warning: some ComfyUI deps had errors${NC}"
+            echo -e "${YELLOW}  Warning: some deps had errors${NC}"
         fi
-    else
-        echo -e "${YELLOW}  /workspace/edgaras_IMAGE/requirements.txt not found, skipping${NC}"
     fi
     echo ""
 
-    # --- 1b. Backend (FastAPI) deps (comfy conda env) ---
-    echo -e "${CYAN}  [1b] Backend (FastAPI) dependencies (comfy env)...${NC}"
-    $CONDA_ACTIVATE comfy && pip install -r "$SCRIPT_DIR/backend/requirements.txt" 2>&1 | tail -5
+    # --- 1b. Backend-specific deps ---
+    echo -e "${CYAN}  [1b] Backend (FastAPI) dependencies...${NC}"
+    pip install -r "$SCRIPT_DIR/backend/requirements.txt" 2>&1 | tail -5
     if [ $? -ne 0 ]; then
         echo -e "${YELLOW}  Warning: some backend deps had errors${NC}"
     fi
     echo ""
 
-    # --- 1c. Frontend (Streamlit) deps (system python) ---
-    echo -e "${CYAN}  [1c] Streamlit frontend (system python)...${NC}"
+    # --- 1c. Frontend (Streamlit) deps ---
+    echo -e "${CYAN}  [1c] Streamlit frontend...${NC}"
     pip install streamlit requests 2>&1 | tail -3
     if [ $? -ne 0 ]; then
         echo -e "${YELLOW}  Warning: streamlit install had errors${NC}"
@@ -196,9 +209,8 @@ if [ "$DO_MODELS" = true ]; then
     download_file "https://huggingface.co/InstantX/InstantID/resolve/main/ip-adapter.bin" "controlnet"
     echo ""
 
-    # --- 2g. LoRA models (custom NSFW + pose) ---
+    # --- 2g. LoRA models (custom — check if present, warn if missing) ---
     echo -e "${YELLOW}  [2g] LoRA models...${NC}"
-    # These are custom LoRAs — check if they exist, warn if missing
     LORA_DIR="$MODELS_DIR/loras"
     REQUIRED_LORAS=(
         "PenisLora.safetensors"
@@ -211,7 +223,7 @@ if [ "$DO_MODELS" = true ]; then
             echo -e "    ${GREEN}already exists${NC}"
         else
             echo -e "${CYAN}  $lora${NC}"
-            echo -e "    ${RED}MISSING — upload manually to $LORA_DIR/${NC}"
+            echo -e "    ${RED}MISSING — upload manually to ComfyUI/models/loras/${NC}"
         fi
     done
     echo ""
