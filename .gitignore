@@ -31,3 +31,11 @@ npm-debug.log*
 
 # Storage artifacts
 backend/storage/
+
+# ComfyUI custom nodes — large model/checkpoint files
+comfyui_custom_nodes/**/*.pth
+comfyui_custom_nodes/**/*.onnx
+comfyui_custom_nodes/**/*.pt
+comfyui_custom_nodes/**/*.bin
+comfyui_custom_nodes/**/*.safetensors
+comfyui_custom_nodes/**/ckpts/

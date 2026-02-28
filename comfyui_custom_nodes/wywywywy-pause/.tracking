@@ -1,0 +1,10 @@
+.github/workflows/publish_action.yml
+.gitignore
+LICENSE
+PauseWorkflowNode.py
+README.md
+__init__.py
+assets/screenshot.png
+js/pause_workflow.js
+manifest.json
+pyproject.toml

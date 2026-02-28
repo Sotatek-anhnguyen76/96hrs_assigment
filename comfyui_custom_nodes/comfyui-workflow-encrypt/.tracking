@@ -1,0 +1,14 @@
+.gitignore
+LICENSE
+pyproject.toml
+README.md
+requirements.txt
+__init__.py
+.github/workflows/publish.yml
+doc/browser-key.png
+doc/console-key.png
+doc/encryption-data.png
+doc/failed.png
+doc/overall.png
+doc/prompt.png
+js/comfyui-workflow-encrypt.js

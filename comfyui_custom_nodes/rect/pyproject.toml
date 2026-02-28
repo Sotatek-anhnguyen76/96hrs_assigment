@@ -1,0 +1,14 @@
+[project]
+name = "rect"
+version = "0.1.2"
+description = "Interactive rectangle tools for ComfyUI: Select, Crop, Mask, Fill."
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+
+[project.urls]
+Repository = "https://github.com/jtrue/ComfyUI-Rect"
+
+[tool.comfy]
+PublisherId = "jtrue"
+DisplayName = "Rect"
+Icon = "https://raw.githubusercontent.com/jtrue/ComfyUI-Rect/main/assets/rect-select.png"
